@@ -55,8 +55,6 @@ The API never returns 401 for missing identity. Audit rows use
 `AUTH_DEFAULT_USER` (default `operator`), or a proxy header if one happens
 to be present (`Remote-User`, etc.) — headers are optional enrichment only.
 
-There is **no** `DEV_AUTH_USER` in the Deployment — unauthenticated requests to `/api/*` return 401 (`/healthz` stays open for probes).
-
 ## Verify
 
 ```bash
