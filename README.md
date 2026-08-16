@@ -17,7 +17,7 @@ Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance 
 | Browse | Per-snapshot file tree + single-file download via `restic` (read-only) |
 | Actions | Ad-hoc Backup / Check CRs |
 | Audit | 90-day restore + download history |
-| Auth | Delegated to reverse-proxy / Authentik forward-auth (no app login) |
+| Auth | No in-app auth; Pangolin + Newt NetworkPolicy only |
 
 Full product requirements: [`docs/PRD.md`](docs/PRD.md).
 

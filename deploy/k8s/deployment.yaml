@@ -53,18 +53,10 @@ spec:
               value: k8up
             - name: K8UP_GLOBAL_SECRET_NAME
               value: k8up-global
-            - name: AUTH_USER_HEADER
-              value: X-authentik-username
-            - name: AUTH_EMAIL_HEADER
-              value: X-authentik-email
-            # Pangolin SSO is at the edge; identity headers often absent.
-            # Trust Newt-only ingress + edge SSO; attribute audit to DefaultUser
-            # unless Remote-User / X-authentik-* is present.
-            - name: AUTH_TRUST_EDGE
-              value: "true"
             - name: AUTH_DEFAULT_USER
               value: operator
-            # No DEV_AUTH_USER in cluster.
+            # No in-app auth. Pangolin/Newt NetworkPolicy is the gate.
+            # Optional identity headers only enrich audit logs if present.
           readinessProbe:
             httpGet:
               path: /healthz

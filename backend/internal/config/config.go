@@ -17,10 +17,7 @@ type Config struct {
         AuthUserHeader      string
         AuthEmailHeader     string
         DevAuthUser         string
-        // TrustEdge: when true, allow requests with no identity headers and
-        // attribute them to DefaultUser. Use when Pangolin/Newt enforces SSO
-        // at the edge but does not inject identity headers (typical lab setup).
-        TrustEdge   bool
+        // DefaultUser is the audit identity when no proxy header is present.
         DefaultUser string
         StaticDir   string
         ResticBinary string
@@ -44,7 +41,6 @@ func Load() Config {
                 AuthUserHeader:       getenv("AUTH_USER_HEADER", "X-authentik-username"),
                 AuthEmailHeader:      getenv("AUTH_EMAIL_HEADER", "X-authentik-email"),
                 DevAuthUser:          os.Getenv("DEV_AUTH_USER"),
-                TrustEdge:            boolEnv("AUTH_TRUST_EDGE", false),
                 DefaultUser:          getenv("AUTH_DEFAULT_USER", "operator"),
                 StaticDir:            os.Getenv("STATIC_DIR"),
                 ResticBinary:         getenv("RESTIC_BINARY", "restic"),
@@ -62,21 +58,6 @@ func getenv(k, def string) string {
                 return v
         }
         return def
-}
-
-func boolEnv(k string, def bool) bool {
-        v := strings.TrimSpace(strings.ToLower(os.Getenv(k)))
-        if v == "" {
-                return def
-        }
-        switch v {
-        case "1", "true", "yes", "on":
-                return true
-        case "0", "false", "no", "off":
-                return false
-        default:
-                return def
-        }
 }
 
 func durationEnv(k string, def time.Duration) time.Duration {

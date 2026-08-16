@@ -46,15 +46,14 @@ Point an HTTP resource at the Kubernetes Service (not a pod IP):
 | Public hostname | e.g. `k8up.your.domain` |
 | Auth | Authentik / forward-auth (same as other apps) |
 
-Identity (optional but preferred):
+## Auth model
 
-- Pangolin **Forwarded Headers**: `Remote-User`, `Remote-Email` (enable in Pangolin if available)
-- Authentik proxy headers: `X-authentik-username`, `X-authentik-email`
+**No in-app login.** Access control is Pangolin (SSO/resource rules) + the
+in-cluster NetworkPolicy (ingress only from `newt`).
 
-If SSO is enforced only at the Pangolin edge and no identity headers are injected
-(common for this lab), the Deployment sets `AUTH_TRUST_EDGE=true` and attributes
-actions to `AUTH_DEFAULT_USER` (default `operator`). NetworkPolicy still limits
-ingress to the `newt` namespace only.
+The API never returns 401 for missing identity. Audit rows use
+`AUTH_DEFAULT_USER` (default `operator`), or a proxy header if one happens
+to be present (`Remote-User`, etc.) — headers are optional enrichment only.
 
 There is **no** `DEV_AUTH_USER` in the Deployment — unauthenticated requests to `/api/*` return 401 (`/healthz` stays open for probes).
 
