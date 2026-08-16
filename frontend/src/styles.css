@@ -141,10 +141,15 @@ input, select {
   margin-bottom: 1rem;
 }
 
-.file-tree button.linkish {
+button.linkish {
   background: none;
   border: none;
   color: var(--accent);
   padding: 0.2rem 0;
   cursor: pointer;
+  font: inherit;
 }
+button.linkish:hover {
+  text-decoration: underline;
+}
+
