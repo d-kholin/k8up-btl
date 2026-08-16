@@ -5,8 +5,10 @@ import {
   Download,
   File,
   Folder,
+  FolderDown,
   Home,
   Loader2,
+  Package,
 } from 'lucide-react'
 import { api, type FileNode } from '../api'
 import { cn, formatBytes } from '../lib/utils'
@@ -46,6 +48,14 @@ export default function Browser() {
   const reqSeq = useRef(0)
 
   const crumbs = useMemo(() => breadcrumbs(path), [path])
+  const folderZipUrl = useMemo(
+    () => api.downloadUrl(ns, name, path, { archive: 'zip', folder: true }),
+    [ns, name, path],
+  )
+  const snapshotZipUrl = useMemo(
+    () => api.downloadUrl(ns, name, '/', { archive: 'zip', folder: true }),
+    [ns, name],
+  )
 
   useEffect(() => {
     const seq = ++reqSeq.current
@@ -94,9 +104,17 @@ export default function Browser() {
             {ns}/{name}
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/snapshots">← Snapshots</Link>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="secondary" size="sm">
+            <a href={snapshotZipUrl} download title="Download entire snapshot as .zip via restic dump">
+              <Package className="h-3.5 w-3.5" />
+              Snapshot .zip
+            </a>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/snapshots">← Snapshots</Link>
+          </Button>
+        </div>
       </div>
 
       {error && <Alert variant="danger">{error}</Alert>}
@@ -105,12 +123,28 @@ export default function Browser() {
         <CardHeader className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-sm font-normal text-muted-foreground">Path</CardTitle>
-            {loading && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Loading{pendingPath ? ` ${pendingPath}` : '…'}
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {loading && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading{pendingPath ? ` ${pendingPath}` : '…'}
+                </span>
+              )}
+              <Button asChild size="sm" variant="secondary">
+                <a
+                  href={folderZipUrl}
+                  download
+                  title={
+                    path === '/'
+                      ? 'Download whole snapshot as zip'
+                      : `Download folder ${path} as zip`
+                  }
+                >
+                  <FolderDown className="h-3.5 w-3.5" />
+                  {path === '/' ? 'Download snapshot .zip' : 'Download folder .zip'}
+                </a>
+              </Button>
+            </div>
           </div>
           <nav
             aria-label="Breadcrumb"
@@ -143,6 +177,10 @@ export default function Browser() {
               )
             })}
           </nav>
+          <p className="text-xs text-muted-foreground">
+            Folders and full snapshots download as zip streams from restic (read-only). Large trees can take a while
+            and will keep transferring until complete.
+          </p>
         </CardHeader>
         <CardContent className="relative min-h-[12rem]">
           {loading && (
@@ -163,11 +201,12 @@ export default function Browser() {
                 <TableHead>Name</TableHead>
                 <TableHead className="w-24">Type</TableHead>
                 <TableHead className="w-28">Size</TableHead>
-                <TableHead className="w-28" />
+                <TableHead className="w-36" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading && nodes.length === 0 &&
+              {loading &&
+                nodes.length === 0 &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={`sk-${i}`} className="animate-pulse">
                     <TableCell>
@@ -230,7 +269,17 @@ export default function Browser() {
                       {isDir ? '—' : formatBytes(n.size)}
                     </TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      {!isDir && (
+                      {isDir ? (
+                        <a
+                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                          href={api.downloadUrl(ns, name, full, { archive: 'zip', folder: true })}
+                          download
+                          title="Download folder as zip"
+                        >
+                          <FolderDown className="h-3.5 w-3.5" />
+                          Zip
+                        </a>
+                      ) : (
                         <a
                           className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                           href={api.downloadUrl(ns, name, n.path || n.name)}

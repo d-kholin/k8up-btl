@@ -130,8 +130,13 @@ export const api = {
     req<FileNode[]>(`/api/v1/snapshots/${ns}/${name}/files?path=${encodeURIComponent(path)}`, {
       signal,
     }),
-  downloadUrl: (ns: string, name: string, path: string) =>
-    `/api/v1/snapshots/${ns}/${name}/download?path=${encodeURIComponent(path)}`,
+  downloadUrl: (ns: string, name: string, path: string, opts?: { archive?: 'zip' | 'tar'; folder?: boolean }) => {
+    const q = new URLSearchParams()
+    q.set('path', path || '/')
+    if (opts?.archive) q.set('archive', opts.archive)
+    if (opts?.folder) q.set('folder', '1')
+    return `/api/v1/snapshots/${ns}/${name}/download?${q.toString()}`
+  },
   audit: (kind?: string) =>
     req<AuditEntry[]>(`/api/v1/audit${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>

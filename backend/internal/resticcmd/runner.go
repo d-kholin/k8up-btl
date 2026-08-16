@@ -249,12 +249,34 @@ func cloneNodes(in []FileNode) []FileNode {
 	return out
 }
 
-// Dump streams a single file to w.
-func (r *Runner) Dump(ctx context.Context, repo RepoEnv, snapshotID, filePath string, w io.Writer) error {
-	if filePath == "" || filePath == "/" {
-		return fmt.Errorf("dump requires a file path")
+// DumpOptions controls restic dump output.
+// Archive is empty for single-file raw dump; "zip" or "tar" for folders / full snapshot.
+type DumpOptions struct {
+	// Archive: "", "zip", or "tar". Required for directories and for path "/".
+	Archive string
+}
+
+// Dump streams a file or folder archive from a snapshot to w.
+// Pass path "/" with Archive set to dump the whole snapshot.
+func (r *Runner) Dump(ctx context.Context, repo RepoEnv, snapshotID, filePath string, w io.Writer, opts DumpOptions) error {
+	filePath = NormalizeBrowsePath(filePath)
+	archive := strings.ToLower(strings.TrimSpace(opts.Archive))
+	switch archive {
+	case "", "zip", "tar":
+	default:
+		return fmt.Errorf("dump archive must be empty, zip, or tar")
 	}
-	cmd := r.run(ctx, repo, "dump", "--no-lock", snapshotID, filePath)
+	if filePath == "/" && archive == "" {
+		// Whole-snapshot dump must be an archive.
+		archive = "zip"
+	}
+
+	args := []string{"dump", "--no-lock"}
+	if archive != "" {
+		args = append(args, "--archive", archive)
+	}
+	args = append(args, snapshotID, filePath)
+	cmd := r.run(ctx, repo, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
