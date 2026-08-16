@@ -300,6 +300,21 @@ func (c *Clients) ListInterruptedRestores(ctx context.Context, argoNS string) ([
 
 // CreateRestoreCR creates a k8up Restore without Argo tracking labels.
 func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshotID, pvcName string, backend map[string]any) (*unstructured.Unstructured, error) {
+        spec := map[string]any{
+                "snapshot": snapshotID,
+                "restoreMethod": map[string]any{
+                        "folder": map[string]any{
+                                "claimName": pvcName,
+                        },
+                },
+                // Homelab Schedules always use PodConfig "backup-pod".
+                "podConfigRef": map[string]any{
+                        "name": "backup-pod",
+                },
+        }
+        if backend != nil {
+                spec["backend"] = backend
+        }
         obj := &unstructured.Unstructured{
                 Object: map[string]any{
                         "apiVersion": "k8up.io/v1",
@@ -313,18 +328,8 @@ func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshot
                                 },
                                 // Explicitly no Argo tracking labels.
                         },
-                        "spec": map[string]any{
-                                "snapshot": snapshotID,
-                                "restoreMethod": map[string]any{
-                                        "folder": map[string]any{
-                                                "claimName": pvcName,
-                                        },
-                                },
-                        },
+                        "spec": spec,
                 },
-        }
-        if backend != nil {
-                _ = unstructured.SetNestedMap(obj.Object, backend, "spec", "backend")
         }
         return c.Dynamic.Resource(GVRRestore).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
 }

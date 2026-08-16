@@ -192,7 +192,11 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListRestores(w http.ResponseWriter, _ *http.Request) {
-        writeJSON(w, http.StatusOK, s.Orch.List())
+        out := s.Orch.List()
+        if out == nil {
+                out = []restore.State{}
+        }
+        writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +262,9 @@ func (s *Server) handleInterrupted(w http.ResponseWriter, r *http.Request) {
         if err != nil {
                 s.writeErr(w, err, http.StatusBadGateway)
                 return
+        }
+        if list == nil {
+                list = []restore.State{}
         }
         writeJSON(w, http.StatusOK, list)
 }
@@ -454,16 +461,43 @@ func (s *Server) repoEnvForSnapshot(ctx context.Context, ns, name string) (resti
                 snapID = name
         }
 
-        secretName, _, _ := nestedString(snap.Object, "spec", "backend", "repoPasswordSecretRef", "name")
-        if secretName == "" {
-                secretName, _, _ = nestedString(snap.Object, "spec", "repository", "passwordSecretRef", "name")
-        }
+        // K8up Snapshot CR on this cluster: spec.repository is a full restic URI
+        // e.g. s3:https://garage.../naku-k8up/<ns>
         repoURL, _, _ := nestedString(snap.Object, "spec", "repository")
         if repoURL == "" {
-                repoURL, _, _ = nestedString(snap.Object, "spec", "backend", "s3", "endpoint")
+                repoURL, _, _ = nestedString(snap.Object, "status", "repository")
         }
 
         env := []string{}
+
+        // Prefer cluster-global K8up secret (homelab: k8up/k8up-global).
+        if s.Cfg.K8upGlobalSecretName != "" {
+                sec, err := s.K8s.GetSecret(ctx, s.Cfg.K8upGlobalSecretNS, s.Cfg.K8upGlobalSecretName)
+                if err != nil {
+                        return resticcmd.RepoEnv{}, "", fmt.Errorf("k8up global secret %s/%s: %w", s.Cfg.K8upGlobalSecretNS, s.Cfg.K8upGlobalSecretName, err)
+                }
+                // Map K8up operator env keys → restic/AWS env.
+                get := func(k string) string {
+                        if v, ok := sec.Data[k]; ok {
+                                return string(v)
+                        }
+                        return ""
+                }
+                if pw := get("BACKUP_GLOBALREPOPASSWORD"); pw != "" {
+                        env = append(env, "RESTIC_PASSWORD="+pw)
+                }
+                if ak := get("BACKUP_GLOBALACCESSKEYID"); ak != "" {
+                        env = append(env, "AWS_ACCESS_KEY_ID="+ak)
+                }
+                if sk := get("BACKUP_GLOBALSECRETACCESSKEY"); sk != "" {
+                        env = append(env, "AWS_SECRET_ACCESS_KEY="+sk)
+                }
+                // Endpoint is already embedded in snapshot repository URI for S3.
+                _ = get("BACKUP_GLOBALS3ENDPOINT")
+        }
+
+        // Optional per-snapshot secret refs (other deployments).
+        secretName, _, _ := nestedString(snap.Object, "spec", "backend", "repoPasswordSecretRef", "name")
         if secretName != "" {
                 sec, err := s.K8s.GetSecret(ctx, ns, secretName)
                 if err != nil {
@@ -471,17 +505,30 @@ func (s *Server) repoEnvForSnapshot(ctx context.Context, ns, name string) (resti
                 }
                 for k, v := range sec.Data {
                         switch k {
-                        case "password", "RESTIC_PASSWORD":
-                                env = append(env, "RESTIC_PASSWORD="+string(v))
+                        case "password", "RESTIC_PASSWORD", "BACKUP_GLOBALREPOPASSWORD":
+                                if !hasEnv(env, "RESTIC_PASSWORD") {
+                                        env = append(env, "RESTIC_PASSWORD="+string(v))
+                                }
+                        case "AWS_ACCESS_KEY_ID", "BACKUP_GLOBALACCESSKEYID":
+                                if !hasEnv(env, "AWS_ACCESS_KEY_ID") {
+                                        env = append(env, "AWS_ACCESS_KEY_ID="+string(v))
+                                }
+                        case "AWS_SECRET_ACCESS_KEY", "BACKUP_GLOBALSECRETACCESSKEY":
+                                if !hasEnv(env, "AWS_SECRET_ACCESS_KEY") {
+                                        env = append(env, "AWS_SECRET_ACCESS_KEY="+string(v))
+                                }
+                        case "RESTIC_REPOSITORY":
+                                if repoURL == "" {
+                                        repoURL = string(v)
+                                }
                         default:
-                                env = append(env, k+"="+string(v))
+                                // ignore unknown keys
                         }
                 }
         }
-        if repoURL != "" && !hasEnv(env, "RESTIC_REPOSITORY") {
-                if strings.HasPrefix(repoURL, "s3:") || strings.HasPrefix(repoURL, "rest:") || strings.Contains(repoURL, "://") {
-                        env = append(env, "RESTIC_REPOSITORY="+repoURL)
-                }
+
+        if repoURL != "" {
+                env = append(env, "RESTIC_REPOSITORY="+repoURL)
         }
         if !hasEnv(env, "RESTIC_REPOSITORY") || !hasEnv(env, "RESTIC_PASSWORD") {
                 return resticcmd.RepoEnv{}, "", fmt.Errorf("could not resolve RESTIC_REPOSITORY/PASSWORD from snapshot %s/%s", ns, name)

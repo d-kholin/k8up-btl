@@ -23,25 +23,30 @@ type Config struct {
         AuditRetention      time.Duration
         ScaleDownTimeout    time.Duration
         RestoreTimeout      time.Duration
+        // Cluster-wide K8up backend secret (this homelab: k8up/k8up-global).
+        K8upGlobalSecretNS   string
+        K8upGlobalSecretName string
 }
 
 func Load() Config {
         return Config{
-                HTTPAddr:            getenv("HTTP_ADDR", ":8080"),
-                Kubeconfig:          os.Getenv("KUBECONFIG"),
-                ArgoCDNamespace:     getenv("ARGOCD_NAMESPACE", "argocd"),
-                AuditDBPath:         getenv("AUDIT_DB_PATH", "./data/audit.db"),
-                PrometheusURL:       os.Getenv("PROMETHEUS_URL"),
-                GrafanaDashboardURL: os.Getenv("GRAFANA_DASHBOARD_URL"),
-                AuthUserHeader:      getenv("AUTH_USER_HEADER", "X-authentik-username"),
-                AuthEmailHeader:     getenv("AUTH_EMAIL_HEADER", "X-authentik-email"),
-                DevAuthUser:         os.Getenv("DEV_AUTH_USER"),
-                StaticDir:           os.Getenv("STATIC_DIR"),
-                ResticBinary:        getenv("RESTIC_BINARY", "restic"),
-                LogLevel:            getenv("LOG_LEVEL", "info"),
-                AuditRetention:      durationEnv("AUDIT_RETENTION", 90*24*time.Hour),
-                ScaleDownTimeout:    durationEnv("SCALE_DOWN_TIMEOUT", 10*time.Minute),
-                RestoreTimeout:      durationEnv("RESTORE_TIMEOUT", 2*time.Hour),
+                HTTPAddr:             getenv("HTTP_ADDR", ":8080"),
+                Kubeconfig:           os.Getenv("KUBECONFIG"),
+                ArgoCDNamespace:      getenv("ARGOCD_NAMESPACE", "argocd"),
+                AuditDBPath:          getenv("AUDIT_DB_PATH", "./data/audit.db"),
+                PrometheusURL:        os.Getenv("PROMETHEUS_URL"),
+                GrafanaDashboardURL:  os.Getenv("GRAFANA_DASHBOARD_URL"),
+                AuthUserHeader:       getenv("AUTH_USER_HEADER", "X-authentik-username"),
+                AuthEmailHeader:      getenv("AUTH_EMAIL_HEADER", "X-authentik-email"),
+                DevAuthUser:          os.Getenv("DEV_AUTH_USER"),
+                StaticDir:            os.Getenv("STATIC_DIR"),
+                ResticBinary:         getenv("RESTIC_BINARY", "restic"),
+                LogLevel:             getenv("LOG_LEVEL", "info"),
+                AuditRetention:       durationEnv("AUDIT_RETENTION", 90*24*time.Hour),
+                ScaleDownTimeout:     durationEnv("SCALE_DOWN_TIMEOUT", 10*time.Minute),
+                RestoreTimeout:       durationEnv("RESTORE_TIMEOUT", 2*time.Hour),
+                K8upGlobalSecretNS:   getenv("K8UP_GLOBAL_SECRET_NAMESPACE", "k8up"),
+                K8upGlobalSecretName: getenv("K8UP_GLOBAL_SECRET_NAME", "k8up-global"),
         }
 }
 
