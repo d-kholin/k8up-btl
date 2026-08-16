@@ -1,110 +1,261 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type RestoreState } from '../api'
-import { formatWhen } from '../lib/utils'
+import { cn, formatWhen } from '../lib/utils'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+
+const MAX_LINES = 1500
 
 export default function Restores() {
   const [items, setItems] = useState<RestoreState[]>([])
   const [error, setError] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [logs, setLogs] = useState<Record<string, string[]>>({})
+  const logEndRef = useRef<HTMLDivElement>(null)
+  const stickBottom = useRef(true)
 
-  const load = () => api.restores().then(setItems).catch((e: Error) => setError(e.message))
+  const load = () =>
+    api
+      .restores()
+      .then((list) => {
+        setItems(list)
+        // Auto-select newest active restore
+        setSelectedId((cur) => {
+          if (cur && list.some((r) => r.restoreId === cur)) return cur
+          const active = list.find((r) => !['done', 'failed'].includes(r.step))
+          return active?.restoreId || list[0]?.restoreId || null
+        })
+      })
+      .catch((e: Error) => setError(e.message))
 
   useEffect(() => {
     load()
     const es = new EventSource('/api/v1/events')
-    es.onmessage = () => load()
-    const t = setInterval(load, 5000)
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data) as {
+          type?: string
+          restoreId?: string
+          line?: string
+          data?: RestoreState
+        }
+        if (msg.type === 'restore') {
+          load()
+          return
+        }
+        if (msg.type === 'restore-log' && msg.restoreId && msg.line != null) {
+          setLogs((prev) => {
+            const prevLines = prev[msg.restoreId!] || []
+            const next = [...prevLines, msg.line!]
+            return {
+              ...prev,
+              [msg.restoreId!]: next.length > MAX_LINES ? next.slice(-MAX_LINES) : next,
+            }
+          })
+          if (!selectedId) setSelectedId(msg.restoreId)
+        }
+      } catch {
+        load()
+      }
+    }
+    const t = setInterval(load, 8000)
     return () => {
       es.close()
       clearInterval(t)
     }
   }, [])
 
+  // Catch-up buffer when selection changes
+  useEffect(() => {
+    if (!selectedId) return
+    api
+      .restoreLogs(selectedId)
+      .then((res) => {
+        setLogs((prev) => {
+          const live = prev[selectedId] || []
+          // merge: prefer longer buffer
+          const merged =
+            res.lines.length >= live.length ? res.lines : [...res.lines, ...live.slice(res.lines.length)]
+          const uniq = dedupeTail(merged)
+          return { ...prev, [selectedId]: uniq.slice(-MAX_LINES) }
+        })
+      })
+      .catch(() => {
+        /* ignore missing */
+      })
+  }, [selectedId])
+
+  useEffect(() => {
+    if (stickBottom.current) {
+      logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logs, selectedId])
+
+  const selected = useMemo(
+    () => items.find((r) => r.restoreId === selectedId) || null,
+    [items, selectedId],
+  )
+  const lines = selectedId ? logs[selectedId] || [] : []
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Restore operations</h1>
-        <p className="text-sm text-muted-foreground">In-process restore jobs from this GUI backend</p>
+        <p className="text-sm text-muted-foreground">
+          Live step status and K8up/restic job logs while a restore runs
+        </p>
       </div>
       {error && <Alert variant="danger">{error}</Alert>}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Step</TableHead>
-                <TableHead>PVC</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Result</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((r) => (
-                <TableRow key={r.restoreId}>
-                  <TableCell className="font-mono text-xs">{r.restoreId.slice(0, 8)}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        r.step === 'done' ? 'success' : r.step === 'failed' ? 'danger' : 'warning'
-                      }
-                    >
-                      {r.step}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {r.pvcNamespace}/{r.pvcName}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatWhen(r.startedAt)}</TableCell>
-                  <TableCell className="text-sm">
-                    {r.step === 'done' && r.argoSyncResumed !== false && (
-                      <Badge variant="success">complete, Argo resumed</Badge>
+
+      <div className="grid gap-4 lg:grid-cols-5">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Jobs</CardTitle>
+            <CardDescription>Select a restore to view logs</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>ID</TableHead>
+                  <TableHead>Step</TableHead>
+                  <TableHead>PVC</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((r) => (
+                  <TableRow
+                    key={r.restoreId}
+                    className={cn(
+                      'cursor-pointer',
+                      selectedId === r.restoreId && 'bg-muted/60',
                     )}
-                    {r.step === 'failed' && r.argoSyncResumed && (
-                      <Badge variant="warning">failed, Argo resumed</Badge>
-                    )}
-                    {r.step === 'failed' && r.argoSyncResumed === false && (
-                      <Badge variant="danger">failed, Argo still stopped</Badge>
-                    )}
-                    {r.lastError && <div className="mt-1 text-xs text-red-400">{r.lastError}</div>}
-                  </TableCell>
-                  <TableCell>
-                    {r.argoSyncResumed === false && (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() =>
-                          api
-                            .resumeArgo('argocd', 'application-controller')
-                            .then(load)
-                            .catch((e: Error) => setError(e.message))
+                    onClick={() => setSelectedId(r.restoreId)}
+                  >
+                    <TableCell className="font-mono text-xs">{r.restoreId.slice(0, 8)}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          r.step === 'done'
+                            ? 'success'
+                            : r.step === 'failed'
+                              ? 'danger'
+                              : 'warning'
                         }
                       >
-                        Resume Argo
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {items.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-muted-foreground">
-                    No restore jobs in this backend process yet.
-                  </TableCell>
-                </TableRow>
+                        {r.step}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="max-w-[140px] truncate font-mono text-xs">
+                      {r.pvcNamespace}/{r.pvcName}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {items.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-muted-foreground">
+                      No restore jobs yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-3">
+          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
+            <div>
+              <CardTitle>Live log</CardTitle>
+              <CardDescription>
+                {selected ? (
+                  <>
+                    <span className="font-mono text-foreground">
+                      {selected.restoreId.slice(0, 8)}
+                    </span>
+                    {' · '}
+                    {selected.step}
+                    {' · '}
+                    {formatWhen(selected.startedAt)}
+                    {selected.restoreCRName ? ` · CR ${selected.restoreCRName}` : ''}
+                  </>
+                ) : (
+                  'No restore selected'
+                )}
+              </CardDescription>
+            </div>
+            {selected?.argoSyncResumed === false && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() =>
+                  api
+                    .resumeArgo('argocd', 'application-controller')
+                    .then(load)
+                    .catch((e: Error) => setError(e.message))
+                }
+              >
+                Resume Argo controller
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent>
+            {selected?.lastError && (
+              <Alert variant="danger" className="mb-3">
+                {selected.lastError}
+              </Alert>
+            )}
+            <div
+              className="h-[420px] overflow-auto rounded-md border bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-emerald-100/90"
+              onScroll={(e) => {
+                const el = e.currentTarget
+                stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+              }}
+            >
+              {lines.length === 0 ? (
+                <div className="text-muted-foreground">
+                  {selected
+                    ? 'Waiting for log lines… (orchestrator steps + restore Job pod)'
+                    : 'Pick a restore job.'}
+                </div>
+              ) : (
+                lines.map((line, i) => (
+                  <div key={i} className="whitespace-pre-wrap break-all">
+                    {line}
+                  </div>
+                ))
               )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+              <div ref={logEndRef} />
+            </div>
+            {selected && (
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                {selected.step === 'done' && selected.argoSyncResumed !== false && (
+                  <Badge variant="success">complete, Argo resumed</Badge>
+                )}
+                {selected.step === 'failed' && selected.argoSyncResumed && (
+                  <Badge variant="warning">failed, Argo resumed</Badge>
+                )}
+                {selected.step === 'failed' && selected.argoSyncResumed === false && (
+                  <Badge variant="danger">failed, Argo still stopped</Badge>
+                )}
+                <span>{lines.length} lines</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
+}
+
+function dedupeTail(lines: string[]): string[] {
+  // Keep order; drop exact consecutive duplicates only
+  const out: string[] = []
+  for (const l of lines) {
+    if (out.length === 0 || out[out.length - 1] !== l) out.push(l)
+  }
+  return out
 }

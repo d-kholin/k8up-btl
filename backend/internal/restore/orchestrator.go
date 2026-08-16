@@ -69,7 +69,9 @@ type Orchestrator struct {
         RestoreTimeout   time.Duration
         Audit            *audit.Store
         Log              *slog.Logger
+        Logs             *LogHub
         OnUpdate         func(State)
+        OnLog            func(restoreID, line string)
 
         mu   sync.Mutex
         jobs map[string]*State
@@ -86,6 +88,7 @@ func NewOrchestrator(c *k8s.Clients, argoNS string, scaleTO, restoreTO time.Dura
                 RestoreTimeout:   restoreTO,
                 Audit:            a,
                 Log:              log,
+                Logs:             NewLogHub(),
                 jobs:             map[string]*State{},
         }
 }
@@ -272,6 +275,7 @@ func (o *Orchestrator) run(st *State) {
         // 2. Pause ALL Argo reconciliation (scale application-controller to 0).
         st.Step = StepPausingArgo
         o.set(st)
+        o.emitLog(st.RestoreID, "pausing Argo CD application-controller…")
         b, _ := json.Marshal(st)
         origCtrl, err := o.Clients.PauseArgoController(ctx, o.ArgoNS, string(b))
         if err != nil {
@@ -286,10 +290,12 @@ func (o *Orchestrator) run(st *State) {
         argoPaused = true
         o.set(st)
         o.Log.Info("argo application-controller paused", "originalReplicas", origCtrl)
+        o.emitLog(st.RestoreID, fmt.Sprintf("Argo controller paused (was %d replica(s))", origCtrl))
 
         // 3. Scale down workload
         st.Step = StepScalingDown
         o.set(st)
+        o.emitLog(st.RestoreID, fmt.Sprintf("scaling down %s %s/%s → 0", wl.Kind, wl.Namespace, wl.Name))
         scaleCtx, cancel := context.WithTimeout(ctx, o.ScaleDownTimeout)
         defer cancel()
         if err := o.Clients.Scale(scaleCtx, wl, 0); err != nil {
@@ -300,6 +306,7 @@ func (o *Orchestrator) run(st *State) {
                 runErr = fmt.Errorf("wait pods gone: %w", err)
                 return
         }
+        o.emitLog(st.RestoreID, "workload pods terminated")
 
         // 4. Restore CR
         st.Step = StepRestoring
@@ -310,12 +317,17 @@ func (o *Orchestrator) run(st *State) {
                 runErr = fmt.Errorf("create restore cr: %w", err)
                 return
         }
+        o.emitLog(st.RestoreID, fmt.Sprintf("created Restore CR %s/%s — following job logs…", st.PVCNamespace, crName))
+
         restoreCtx, cancelR := context.WithTimeout(ctx, o.RestoreTimeout)
         defer cancelR()
+        // Stream job logs in parallel with status wait.
+        go o.followRestoreLogs(restoreCtx, st.RestoreID, st.PVCNamespace, crName)
         if err := o.waitRestoreComplete(restoreCtx, st.PVCNamespace, crName); err != nil {
                 runErr = fmt.Errorf("restore: %w", err)
                 return
         }
+        o.emitLog(st.RestoreID, "··· restore job finished successfully")
 
         // 5. Scale up workload
         st.Step = StepScalingUp
@@ -325,6 +337,28 @@ func (o *Orchestrator) run(st *State) {
                 return
         }
         // 6. Resume Argo controller — defer
+}
+
+func (o *Orchestrator) emitLog(restoreID, line string) {
+        if o.Logs != nil {
+                o.Logs.Append(restoreID, line)
+        }
+        if o.OnLog != nil {
+                o.OnLog(restoreID, line)
+        }
+}
+
+func (o *Orchestrator) followRestoreLogs(ctx context.Context, restoreID, ns, crName string) {
+        if o.Clients == nil {
+                return
+        }
+        err := o.Clients.FollowRestoreJobLogs(ctx, ns, crName, func(line string) {
+                o.emitLog(restoreID, line)
+        })
+        if err != nil && ctx.Err() == nil {
+                o.emitLog(restoreID, fmt.Sprintf("··· log follow ended: %v", err))
+                o.Log.Warn("restore log follow ended", "restoreId", restoreID, "err", err)
+        }
 }
 
 func (o *Orchestrator) waitRestoreComplete(ctx context.Context, ns, name string) error {

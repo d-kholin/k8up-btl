@@ -53,6 +53,15 @@ func NewServer(cfg config.Config, clients *k8s.Clients, orch *restore.Orchestrat
                 b, _ := json.Marshal(map[string]any{"type": "restore", "data": st})
                 s.broadcast(b)
         }
+        orch.OnLog = func(restoreID, line string) {
+                b, _ := json.Marshal(map[string]any{
+                        "type":      "restore-log",
+                        "restoreId": restoreID,
+                        "line":      line,
+                        "ts":        time.Now().UTC().Format(time.RFC3339Nano),
+                })
+                s.broadcast(b)
+        }
         return s
 }
 
@@ -67,6 +76,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /api/v1/restores", s.handleListRestores)
         mux.HandleFunc("POST /api/v1/restores", s.handleStartRestore)
         mux.HandleFunc("GET /api/v1/restores/{id}", s.handleGetRestore)
+        mux.HandleFunc("GET /api/v1/restores/{id}/logs", s.handleRestoreLogs)
         mux.HandleFunc("POST /api/v1/restores/{id}/resume-argo", s.handleResumeArgoByRestore)
         mux.HandleFunc("POST /api/v1/argo/{namespace}/{name}/resume", s.handleResumeArgo)
         mux.HandleFunc("GET /api/v1/interrupted", s.handleInterrupted)
@@ -207,6 +217,24 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
                 return
         }
         writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleRestoreLogs(w http.ResponseWriter, r *http.Request) {
+        id := r.PathValue("id")
+        if _, ok := s.Orch.Get(id); !ok {
+                // still return buffer if any
+        }
+        lines := []string{}
+        if s.Orch.Logs != nil {
+                lines = s.Orch.Logs.Snapshot(id)
+        }
+        if lines == nil {
+                lines = []string{}
+        }
+        writeJSON(w, http.StatusOK, map[string]any{
+                "restoreId": id,
+                "lines":     lines,
+        })
 }
 
 func (s *Server) handleStartRestore(w http.ResponseWriter, r *http.Request) {

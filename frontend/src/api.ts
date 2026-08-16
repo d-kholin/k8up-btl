@@ -77,6 +77,8 @@ export const api = {
   jobs: () => req<Record<string, K8sObject[] | { error: string }>>('/api/v1/jobs'),
   restores: () => req<RestoreState[]>('/api/v1/restores'),
   restore: (id: string) => req<RestoreState>(`/api/v1/restores/${id}`),
+  restoreLogs: (id: string) =>
+    req<{ restoreId: string; lines: string[] }>(`/api/v1/restores/${id}/logs`),
   startRestore: (body: {
     snapshotNamespace: string
     snapshotName: string
