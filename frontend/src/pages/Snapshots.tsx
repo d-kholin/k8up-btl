@@ -1,29 +1,27 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ChevronDown, ChevronRight, FolderSearch } from 'lucide-react'
 import { api, type K8sObject } from '../api'
+import { formatWhen } from '../lib/utils'
+import { Alert } from '../components/ui/alert'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog'
+import { Input } from '../components/ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 
-type SnapSpec = {
-  date?: string
-  id?: string
-  paths?: string[]
-  repository?: string
-}
+type SnapSpec = { date?: string; id?: string; paths?: string[]; repository?: string }
 
 function snapSpec(s: K8sObject): SnapSpec {
   return (s.spec || {}) as SnapSpec
-}
-
-/** Workload/PVC key from restic paths, e.g. /data/lubelogger-data-encrypted or /mealie-postgres.sql */
-function workloadKey(s: K8sObject): string {
-  const paths = snapSpec(s).paths || []
-  if (paths.length === 0) return '(unknown)'
-  return paths
-    .map((p) => {
-      const cleaned = p.replace(/\/+$/, '')
-      const base = cleaned.split('/').filter(Boolean).pop() || cleaned
-      return base
-    })
-    .join(', ')
 }
 
 function snapTime(s: K8sObject): number {
@@ -31,19 +29,36 @@ function snapTime(s: K8sObject): number {
   return d ? new Date(d).getTime() : 0
 }
 
-type Group = {
-  namespace: string
-  workload: string
-  key: string
-  items: K8sObject[]
+function workloadFromPaths(paths: string[]): string {
+  if (!paths.length) return '(unknown)'
+  return paths
+    .map((p) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || p)
+    .join(', ')
 }
+
+function guessPvc(s: K8sObject): string {
+  const paths = snapSpec(s).paths || []
+  return (
+    paths
+      .map((p) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '')
+      .find((b) => b && !b.endsWith('.sql')) || ''
+  )
+}
+
+type NsGroup = { namespace: string; items: K8sObject[] }
 
 export default function Snapshots() {
   const [items, setItems] = useState<K8sObject[]>([])
   const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
-  const [busy, setBusy] = useState<string | null>(null)
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState(false)
+
+  // Restore dialog
+  const [restoreSnap, setRestoreSnap] = useState<K8sObject | null>(null)
+  const [pvcNamespace, setPvcNamespace] = useState('')
+  const [pvcName, setPvcName] = useState('')
+  const [confirmText, setConfirmText] = useState('')
 
   useEffect(() => {
     api.snapshots().then(setItems).catch((e: Error) => setError(e.message))
@@ -54,196 +69,236 @@ export default function Snapshots() {
     const filtered = items.filter((s) => {
       if (!q) return true
       const spec = snapSpec(s)
-      const hay = [
-        s.namespace,
-        s.name,
-        workloadKey(s),
-        ...(spec.paths || []),
-        spec.id,
-        spec.repository,
-      ]
+      const hay = [s.namespace, s.name, ...(spec.paths || []), spec.id, spec.repository]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
       return hay.includes(q)
     })
 
-    const map = new Map<string, Group>()
+    const map = new Map<string, K8sObject[]>()
     for (const s of filtered) {
       const ns = s.namespace || 'default'
-      const wl = workloadKey(s)
-      const key = `${ns}::${wl}`
-      let g = map.get(key)
-      if (!g) {
-        g = { namespace: ns, workload: wl, key, items: [] }
-        map.set(key, g)
-      }
-      g.items.push(s)
+      if (!map.has(ns)) map.set(ns, [])
+      map.get(ns)!.push(s)
     }
-
-    const out = Array.from(map.values())
-    for (const g of out) {
-      g.items.sort((a, b) => snapTime(b) - snapTime(a))
-    }
-    out.sort((a, b) => {
-      const ns = a.namespace.localeCompare(b.namespace)
-      if (ns !== 0) return ns
-      return a.workload.localeCompare(b.workload)
-    })
+    const out: NsGroup[] = [...map.entries()].map(([namespace, list]) => ({
+      namespace,
+      items: list.sort((a, b) => snapTime(b) - snapTime(a)),
+    }))
+    out.sort((a, b) => a.namespace.localeCompare(b.namespace))
     return out
   }, [items, filter])
 
-  function toggle(key: string) {
-    setCollapsed((c) => ({ ...c, [key]: !c[key] }))
+  function openRestore(s: K8sObject) {
+    setRestoreSnap(s)
+    setPvcNamespace(s.namespace || '')
+    setPvcName(guessPvc(s))
+    setConfirmText('')
   }
 
-  function expandAll() {
-    setCollapsed({})
-  }
-
-  function collapseAll() {
-    const next: Record<string, boolean> = {}
-    for (const g of groups) next[g.key] = true
-    setCollapsed(next)
-  }
-
-  async function restore(s: K8sObject) {
-    const paths = snapSpec(s).paths || []
-    const guessedPvc =
-      paths
-        .map((p) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '')
-        .find((b) => b && !b.endsWith('.sql')) || ''
-
-    const pvcNamespace = window.prompt('Target PVC namespace', s.namespace || '') || ''
-    const pvcName = window.prompt('Target PVC name', guessedPvc) || ''
-    if (!pvcNamespace || !pvcName) return
-    const ok = window.confirm(
-      `Restore snapshot ${s.namespace}/${s.name} onto PVC ${pvcNamespace}/${pvcName}?\n\nThis will scale down the owning workload, pause Argo if managed, run K8up Restore, then scale up and resume sync.`,
-    )
-    if (!ok) return
-    setBusy(`${s.namespace}/${s.name}`)
+  async function submitRestore() {
+    if (!restoreSnap) return
+    if (confirmText !== 'restore') return
+    if (!pvcNamespace || !pvcName) {
+      setError('PVC namespace and name are required')
+      return
+    }
+    setBusy(true)
     setError('')
     try {
       await api.startRestore({
-        snapshotNamespace: s.namespace || '',
-        snapshotName: s.name || '',
+        snapshotNamespace: restoreSnap.namespace || '',
+        snapshotName: restoreSnap.name || '',
         pvcNamespace,
         pvcName,
       })
+      setRestoreSnap(null)
       window.location.href = '/restores'
     } catch (e) {
       setError((e as Error).message)
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
-  const totalShown = groups.reduce((n, g) => n + g.items.length, 0)
+  const total = groups.reduce((n, g) => n + g.items.length, 0)
 
   return (
-    <div>
-      <h1>Snapshots</h1>
-      {error && <p className="error">{error}</p>}
-      <div className="card row">
-        <input
-          placeholder="Filter namespace, PVC, path…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          style={{ minWidth: 280 }}
-        />
-        <span className="muted">
-          {groups.length} groups · {totalShown} snapshots
-        </span>
-        <button type="button" className="secondary" onClick={expandAll}>
-          Expand all
-        </button>
-        <button type="button" className="secondary" onClick={collapseAll}>
-          Collapse all
-        </button>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Snapshots</h1>
+        <p className="text-sm text-muted-foreground">Grouped by namespace · collapsed by default</p>
       </div>
 
+      {error && <Alert variant="danger">{error}</Alert>}
+
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center gap-3 space-y-0">
+          <Input
+            placeholder="Filter namespace, PVC, path…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="max-w-sm"
+          />
+          <span className="text-sm text-muted-foreground">
+            {groups.length} namespaces · {total} snapshots
+          </span>
+          <div className="ml-auto flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const next: Record<string, boolean> = {}
+                for (const g of groups) next[g.namespace] = true
+                setExpanded(next)
+              }}
+            >
+              Expand all
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setExpanded({})}>
+              Collapse all
+            </Button>
+          </div>
+        </CardHeader>
+      </Card>
+
       {groups.length === 0 && (
-        <div className="card muted">No snapshots match.</div>
+        <Card>
+          <CardContent className="py-8 text-sm text-muted-foreground">No snapshots match.</CardContent>
+        </Card>
       )}
 
       {groups.map((g) => {
-        const isCollapsed = !!collapsed[g.key]
+        const open = !!expanded[g.namespace]
+        const latest = g.items[0]
         return (
-          <div className="card" key={g.key} style={{ paddingTop: '0.75rem' }}>
+          <Card key={g.namespace}>
             <button
               type="button"
-              className="linkish"
-              onClick={() => toggle(g.key)}
-              style={{
-                display: 'flex',
-                width: '100%',
-                alignItems: 'baseline',
-                gap: '0.75rem',
-                textAlign: 'left',
-                marginBottom: isCollapsed ? 0 : '0.5rem',
-              }}
+              className="flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-muted/30"
+              onClick={() => setExpanded((e) => ({ ...e, [g.namespace]: !open }))}
             >
-              <span className="muted" style={{ width: '1.2rem' }}>
-                {isCollapsed ? '▸' : '▾'}
-              </span>
-              <span>
-                <span className="mono">{g.namespace}</span>
-                <span className="muted"> / </span>
-                <strong className="mono">{g.workload}</strong>
-              </span>
-              <span className="badge">{g.items.length}</span>
-              <span className="muted" style={{ marginLeft: 'auto', fontSize: '0.85rem' }}>
-                latest {g.items[0] ? new Date(snapTime(g.items[0])).toLocaleString() : '—'}
-              </span>
+              {open ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-sm font-medium">{g.namespace}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  latest {formatWhen(snapSpec(latest).date || latest.creationTimestamp)}
+                  {snapSpec(latest).paths?.[0] ? ` · ${workloadFromPaths(snapSpec(latest).paths || [])}` : ''}
+                </div>
+              </div>
+              <Badge variant="secondary">{g.items.length}</Badge>
             </button>
 
-            {!isCollapsed && (
-              <table>
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Snapshot</th>
-                    <th>Paths</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {g.items.map((s) => {
-                    const spec = snapSpec(s)
-                    const when = spec.date || s.creationTimestamp
-                    return (
-                      <tr key={`${s.namespace}/${s.name}`}>
-                        <td className="muted">{when ? new Date(when).toLocaleString() : '—'}</td>
-                        <td className="mono">
-                          <div>{s.name}</div>
-                          {spec.id && (
-                            <div className="muted" style={{ fontSize: '0.75rem' }} title={spec.id}>
-                              {spec.id.slice(0, 12)}…
+            {open && (
+              <CardContent className="border-t pt-4">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>When</TableHead>
+                      <TableHead>Snapshot</TableHead>
+                      <TableHead>Workload / paths</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {g.items.map((s) => {
+                      const spec = snapSpec(s)
+                      return (
+                        <TableRow key={`${s.namespace}/${s.name}`}>
+                          <TableCell className="whitespace-nowrap text-muted-foreground">
+                            {formatWhen(spec.date || s.creationTimestamp)}
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-mono text-xs">{s.name}</div>
+                            {spec.id && (
+                              <div className="font-mono text-[11px] text-muted-foreground" title={spec.id}>
+                                {spec.id.slice(0, 12)}…
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-[240px] truncate font-mono text-xs text-muted-foreground">
+                            {workloadFromPaths(spec.paths || [])}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button asChild size="sm" variant="ghost">
+                                <Link to={`/snapshots/${s.namespace}/${s.name}/browse`}>
+                                  <FolderSearch className="h-3.5 w-3.5" />
+                                  Browse
+                                </Link>
+                              </Button>
+                              <Button size="sm" onClick={() => openRestore(s)}>
+                                Restore…
+                              </Button>
                             </div>
-                          )}
-                        </td>
-                        <td className="mono muted" style={{ fontSize: '0.85rem' }}>
-                          {(spec.paths || []).join(', ') || '—'}
-                        </td>
-                        <td className="row">
-                          <Link to={`/snapshots/${s.namespace}/${s.name}/browse`}>Browse</Link>
-                          <button
-                            type="button"
-                            disabled={busy === `${s.namespace}/${s.name}`}
-                            onClick={() => restore(s)}
-                          >
-                            Restore…
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </CardContent>
             )}
-          </div>
+          </Card>
         )
       })}
+
+      <Dialog open={!!restoreSnap} onOpenChange={(o) => !o && setRestoreSnap(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm restore</DialogTitle>
+            <DialogDescription>
+              Restores snapshot{' '}
+              <span className="font-mono text-foreground">
+                {restoreSnap?.namespace}/{restoreSnap?.name}
+              </span>{' '}
+              onto a PVC. Argo CD reconciliation is paused cluster-wide for the duration, the
+              workload is scaled to 0, then brought back.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="grid gap-1.5">
+              <label className="text-xs text-muted-foreground">PVC namespace</label>
+              <Input value={pvcNamespace} onChange={(e) => setPvcNamespace(e.target.value)} />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-xs text-muted-foreground">PVC name</label>
+              <Input value={pvcName} onChange={(e) => setPvcName(e.target.value)} />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-xs text-muted-foreground">
+                Type <span className="font-mono text-foreground">restore</span> to confirm
+              </label>
+              <Input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="restore"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRestoreSnap(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={busy || confirmText !== 'restore' || !pvcNamespace || !pvcName}
+              onClick={submitRestore}
+            >
+              {busy ? 'Starting…' : 'Start restore'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

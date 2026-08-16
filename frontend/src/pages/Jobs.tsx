@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api, type K8sObject } from '../api'
+import { formatWhen } from '../lib/utils'
+import { Alert } from '../components/ui/alert'
+import { Button } from '../components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { Input } from '../components/ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 
 export default function Jobs() {
   const [jobs, setJobs] = useState<Record<string, K8sObject[] | { error: string }>>({})
@@ -19,7 +25,7 @@ export default function Jobs() {
       setError('Enter a namespace first')
       return
     }
-    if (!window.confirm(`Create on-demand ${kind} in namespace ${ns}?`)) return
+    if (!window.confirm(`Create on-demand ${kind} in ${ns}?`)) return
     try {
       if (kind === 'backup') await api.createBackup(ns)
       else await api.createCheck(ns)
@@ -30,50 +36,64 @@ export default function Jobs() {
   }
 
   return (
-    <div>
-      <h1>Jobs</h1>
-      {error && <p className="error">{error}</p>}
-      <div className="card row">
-        <input placeholder="Namespace for ad-hoc job" value={ns} onChange={(e) => setNs(e.target.value)} />
-        <button onClick={() => trigger('backup')}>Run Backup…</button>
-        <button className="secondary" onClick={() => trigger('check')}>
-          Run Check…
-        </button>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
+        <p className="text-sm text-muted-foreground">Live Backup / Restore / Check / Prune CRs</p>
       </div>
+      {error && <Alert variant="danger">{error}</Alert>}
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center gap-2 space-y-0">
+          <Input
+            placeholder="Namespace for ad-hoc job"
+            value={ns}
+            onChange={(e) => setNs(e.target.value)}
+            className="max-w-xs"
+          />
+          <Button onClick={() => trigger('backup')}>Run Backup…</Button>
+          <Button variant="secondary" onClick={() => trigger('check')}>
+            Run Check…
+          </Button>
+        </CardHeader>
+      </Card>
       {(['backups', 'restores', 'checks', 'prunes'] as const).map((key) => {
         const val = jobs[key]
         const list = Array.isArray(val) ? val : []
         const err = val && !Array.isArray(val) ? val.error : ''
         return (
-          <div key={key} className="card">
-            <h2 style={{ marginTop: 0 }}>{key}</h2>
-            {err && <p className="error">{err}</p>}
-            <table>
-              <thead>
-                <tr>
-                  <th>Namespace</th>
-                  <th>Name</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.slice(0, 50).map((j) => (
-                  <tr key={`${j.namespace}/${j.name}`}>
-                    <td className="mono">{j.namespace}</td>
-                    <td className="mono">{j.name}</td>
-                    <td className="muted">{j.creationTimestamp ? new Date(j.creationTimestamp).toLocaleString() : '—'}</td>
-                  </tr>
-                ))}
-                {list.length === 0 && !err && (
-                  <tr>
-                    <td colSpan={3} className="muted">
-                      None
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <Card key={key}>
+            <CardHeader>
+              <CardTitle className="capitalize">{key}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {err && <Alert variant="danger">{err}</Alert>}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Namespace</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {list.slice(0, 50).map((j) => (
+                    <TableRow key={`${j.namespace}/${j.name}`}>
+                      <TableCell className="font-mono text-xs">{j.namespace}</TableCell>
+                      <TableCell className="font-mono text-xs">{j.name}</TableCell>
+                      <TableCell className="text-muted-foreground">{formatWhen(j.creationTimestamp)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {list.length === 0 && !err && (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-muted-foreground">
+                        None
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         )
       })}
     </div>

@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { api, type FileNode } from '../api'
+import { formatBytes } from '../lib/utils'
+import { Alert } from '../components/ui/alert'
+import { Button } from '../components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 
 export default function Browser() {
   const { ns = '', name = '' } = useParams()
@@ -22,76 +27,84 @@ export default function Browser() {
   const parent = path === '/' ? null : path.replace(/\/?[^/]+\/?$/, '') || '/'
 
   return (
-    <div>
-      <h1>
-        Browse <span className="mono">{ns}/{name}</span>
-      </h1>
-      <div className="card row">
-        <span className="muted">Path:</span>
-        <span className="mono">{path}</span>
-        {parent && (
-          <button className="secondary" onClick={() => setPath(parent)}>
-            ↑ Up
-          </button>
-        )}
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Browse snapshot</h1>
+          <p className="font-mono text-sm text-muted-foreground">
+            {ns}/{name}
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/snapshots">← Snapshots</Link>
+        </Button>
       </div>
-      {error && <p className="error">{error}</p>}
-      {loading && <p className="muted">Loading…</p>}
-      <div className="card file-tree">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Size</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {nodes.map((n) => (
-              <tr key={n.path || n.name}>
-                <td className="mono">
-                  {n.type === 'dir' ? (
-                    <button className="linkish" onClick={() => setPath(n.path || `/${n.name}`)}>
-                      {n.name || n.path}/
-                    </button>
-                  ) : (
-                    n.name || n.path
-                  )}
-                </td>
-                <td>{n.type || '—'}</td>
-                <td className="muted">{n.size != null ? formatBytes(n.size) : '—'}</td>
-                <td>
-                  {n.type !== 'dir' && (
-                    <a href={api.downloadUrl(ns, name, n.path || n.name)} download>
-                      Download
-                    </a>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!loading && nodes.length === 0 && (
-              <tr>
-                <td colSpan={4} className="muted">
-                  Empty or unavailable (check restic secret mapping).
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+
+      {error && <Alert variant="danger">{error}</Alert>}
+
+      <Card>
+        <CardHeader className="flex flex-row items-center gap-3 space-y-0">
+          <CardTitle className="text-sm font-normal text-muted-foreground">Path</CardTitle>
+          <code className="text-sm">{path}</code>
+          {parent && (
+            <Button size="sm" variant="secondary" onClick={() => setPath(parent)}>
+              ↑ Up
+            </Button>
+          )}
+          {loading && <span className="text-xs text-muted-foreground">Loading…</span>}
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Size</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {nodes.map((n) => (
+                <TableRow key={n.path || n.name}>
+                  <TableCell className="font-mono text-xs">
+                    {n.type === 'dir' ? (
+                      <button
+                        type="button"
+                        className="text-primary hover:underline"
+                        onClick={() => setPath(n.path || `/${n.name}`)}
+                      >
+                        {(n.name || n.path) + '/'}
+                      </button>
+                    ) : (
+                      n.name || n.path
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{n.type || '—'}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatBytes(n.size)}</TableCell>
+                  <TableCell className="text-right">
+                    {n.type !== 'dir' && (
+                      <a
+                        className="text-sm text-primary hover:underline"
+                        href={api.downloadUrl(ns, name, n.path || n.name)}
+                        download
+                      >
+                        Download
+                      </a>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {!loading && nodes.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-muted-foreground">
+                    Empty or unavailable.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   )
-}
-
-function formatBytes(n: number) {
-  if (n < 1024) return `${n} B`
-  const u = ['KB', 'MB', 'GB', 'TB']
-  let v = n
-  let i = -1
-  do {
-    v /= 1024
-    i++
-  } while (v >= 1024 && i < u.length - 1)
-  return `${v.toFixed(1)} ${u[i]}`
 }
