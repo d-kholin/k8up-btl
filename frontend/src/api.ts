@@ -52,6 +52,29 @@ export type FileNode = {
   mtime?: string
 }
 
+export type StorageStats = {
+  collectedAt: string
+  logicalBytes: number
+  storedBytes: number
+  savedBytes: number
+  dedupRatio: number
+  snapshotCount: number
+  partial?: boolean
+  stale?: boolean
+  computing?: boolean
+  cacheAgeSec?: number
+  error?: string
+  repos: Array<{
+    namespace: string
+    repository: string
+    logicalBytes: number
+    storedBytes: number
+    snapshotCount: number
+    dedupRatio: number
+    error?: string
+  }>
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -79,6 +102,8 @@ export const api = {
   restore: (id: string) => req<RestoreState>(`/api/v1/restores/${id}`),
   restoreLogs: (id: string) =>
     req<{ restoreId: string; lines: string[] }>(`/api/v1/restores/${id}/logs`),
+  storageStats: (refresh = false) =>
+    req<StorageStats>(`/api/v1/stats/storage${refresh ? '?refresh=1' : ''}`),
   startRestore: (body: {
     snapshotNamespace: string
     snapshotName: string

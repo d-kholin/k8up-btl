@@ -31,3 +31,4 @@ backend/vendor/
 # Coverage
 coverage.out
 coverage.html
+app.tgz

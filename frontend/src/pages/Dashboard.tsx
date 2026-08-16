@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { Link } from 'react-router-dom'
-import { Archive, CheckCircle2, Clock3, Database, HardDrive, History, AlertTriangle } from 'lucide-react'
-import { api, type AuditEntry, type K8sObject, type RestoreState } from '../api'
+import {
+  Archive,
+  CheckCircle2,
+  Clock3,
+  Database,
+  HardDrive,
+  History,
+  AlertTriangle,
+  PieChart,
+  RefreshCw,
+} from 'lucide-react'
+import { api, type AuditEntry, type K8sObject, type RestoreState, type StorageStats } from '../api'
 import { formatBytes, formatWhen } from '../lib/utils'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -31,8 +41,19 @@ export default function Dashboard() {
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [interrupted, setInterrupted] = useState<RestoreState[]>([])
   const [meta, setMeta] = useState<{ grafanaDashboardUrl?: string } | null>(null)
+  const [storage, setStorage] = useState<StorageStats | null>(null)
+  const [storageLoading, setStorageLoading] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+
+  const loadStorage = (refresh = false) => {
+    setStorageLoading(true)
+    api
+      .storageStats(refresh)
+      .then(setStorage)
+      .catch((e: Error) => setError((prev) => prev || e.message))
+      .finally(() => setStorageLoading(false))
+  }
 
   const load = () => {
     setLoading(true)
@@ -54,12 +75,48 @@ export default function Dashboard() {
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
+    loadStorage(false)
   }
 
   useEffect(() => {
     load()
   }, [])
 
+  // Poll while restic stats are computing in the background (non-blocking API).
+  useEffect(() => {
+    if (!storage?.computing) return
+    const t = setInterval(() => {
+      api
+        .storageStats(false)
+        .then(setStorage)
+        .catch(() => {
+          /* keep last */
+        })
+    }, 3000)
+    return () => clearInterval(t)
+  }, [storage?.computing])
+
+  const storageValue = (n?: number) => {
+    if (storage?.computing && (storage.logicalBytes == null || (!storage.collectedAt && !storage.logicalBytes && !storage.storedBytes))) {
+      return 'calc…'
+    }
+    if (storageLoading && !storage) return 'calc…'
+    if (storage?.error && !storage.collectedAt && !storage.logicalBytes) return '—'
+    return formatBytes(n)
+  }
+
+  const storageHintLogical =
+    storage?.error && !storage.logicalBytes
+      ? storage.error
+      : storage?.computing
+        ? 'running restic stats…'
+        : 'restic restore-size across repos'
+
+  const storageHintStored = storage
+    ? storage.computing && !storage.storedBytes
+      ? 'running restic stats…'
+      : `${Math.round((storage.dedupRatio || 0) * 100)}% dedup · saved ${formatBytes(storage.savedBytes)}`
+    : 'restic raw-data'
   const stats = useMemo(() => {
     const ns = new Set(snapshots.map((s) => s.namespace).filter(Boolean))
     const restorePts = snapshots.length
@@ -168,12 +225,24 @@ export default function Dashboard() {
         </Alert>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           title="Restore points"
           value={loading ? '…' : String(stats.restorePts)}
           hint={`${stats.namespaces} namespaces · ${stats.workloads} workloads`}
           icon={HardDrive}
+        />
+        <StatCard
+          title="Data (logical)"
+          value={storageValue(storage?.logicalBytes)}
+          hint={storageHintLogical}
+          icon={PieChart}
+        />
+        <StatCard
+          title="Stored on backend"
+          value={storageValue(storage?.storedBytes)}
+          hint={storageHintStored}
+          icon={Database}
         />
         <StatCard
           title="Schedules"
@@ -187,6 +256,107 @@ export default function Dashboard() {
           hint={stats.restoreFail ? `${stats.restoreFail} failed (audit)` : 'no failures in audit'}
           icon={History}
         />
+      </div>
+
+      {(storage || storageLoading) && (
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+            <div>
+              <CardTitle>Storage & deduplication</CardTitle>
+              <CardDescription>
+                Logical = unique file content (restore-size). Stored = bytes in Garage (raw-data).
+                {storage?.cacheAgeSec != null && storage.cacheAgeSec > 0
+                  ? ` · cached ${Math.round(storage.cacheAgeSec / 60)}m ago`
+                  : ''}
+                {storage?.partial ? ' · partial' : ''}
+                {storage?.stale ? ' · stale' : ''}
+                {storage?.computing ? ' · computing…' : ''}
+              </CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={storageLoading || !!storage?.computing}
+              onClick={() => loadStorage(true)}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${storageLoading || storage?.computing ? 'animate-spin' : ''}`} />
+              Refresh stats
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {storage?.error && (
+              <Alert variant="danger" className="mb-3">
+                {storage.error}
+              </Alert>
+            )}
+            {!storage?.repos?.length && storage?.computing ? (
+              <p className="text-sm text-muted-foreground">
+                Querying restic repositories in the background — this can take a few minutes on first run.
+              </p>
+            ) : storage ? (
+              <>
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Logical total</div>
+                <div className="text-lg font-semibold">{formatBytes(storage.logicalBytes)}</div>
+              </div>
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Stored total</div>
+                <div className="text-lg font-semibold">{formatBytes(storage.storedBytes)}</div>
+              </div>
+              <div className="rounded-md border p-3">
+                <div className="text-xs text-muted-foreground">Dedup savings</div>
+                <div className="text-lg font-semibold">
+                  {formatBytes(storage.savedBytes)}{' '}
+                  <span className="text-sm font-normal text-muted-foreground">
+                    ({Math.round((storage.dedupRatio || 0) * 100)}%)
+                  </span>
+                </div>
+              </div>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Namespace</TableHead>
+                  <TableHead>Snaps</TableHead>
+                  <TableHead>Logical</TableHead>
+                  <TableHead>Stored</TableHead>
+                  <TableHead>Dedup</TableHead>
+                  <TableHead>Repo</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...storage.repos]
+                  .sort((a, b) => b.logicalBytes - a.logicalBytes)
+                  .map((r) => (
+                    <TableRow key={r.namespace}>
+                      <TableCell className="font-mono text-xs">{r.namespace}</TableCell>
+                      <TableCell>{r.snapshotCount}</TableCell>
+                      <TableCell>{formatBytes(r.logicalBytes)}</TableCell>
+                      <TableCell>{formatBytes(r.storedBytes)}</TableCell>
+                      <TableCell>
+                        {r.error ? (
+                          <span className="text-xs text-red-700 dark:text-red-500" title={r.error}>
+                            error
+                          </span>
+                        ) : (
+                          `${Math.round((r.dedupRatio || 0) * 100)}%`
+                        )}
+                      </TableCell>
+                      <TableCell className="max-w-[180px] truncate font-mono text-[11px] text-muted-foreground">
+                        {r.repository}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+              </>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Downloads"
           value={loading ? '…' : formatBytes(stats.bytesDownloaded)}

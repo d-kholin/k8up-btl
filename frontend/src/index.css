@@ -4,6 +4,30 @@
 
 @layer base {
   :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --primary: 221 83% 45%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    /* Darker muted text for light-mode readability */
+    --muted-foreground: 215 20% 32%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 84%;
+    --input: 214 32% 84%;
+    --ring: 221 83% 45%;
+    --radius: 0.6rem;
+    --log-bg: 222 47% 8%;
+    --log-fg: 142 70% 80%;
+  }
+
+  .dark {
     --background: 222 47% 6%;
     --foreground: 210 40% 96%;
     --card: 222 40% 9%;
@@ -21,11 +45,18 @@
     --border: 217 20% 18%;
     --input: 217 20% 18%;
     --ring: 217 91% 60%;
-    --radius: 0.6rem;
+    --log-bg: 0 0% 0% / 0.4;
+    --log-fg: 142 70% 85%;
   }
 
   * {
     @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
   }
 
   body {
