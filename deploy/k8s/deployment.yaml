@@ -1,38 +1,36 @@
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: k8up-gui-data
-  namespace: k8up-gui
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: k8up-gui
   namespace: k8up-gui
   labels:
+    app: k8up-gui
     app.kubernetes.io/name: k8up-gui
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
+      app: k8up-gui
       app.kubernetes.io/name: k8up-gui
   template:
     metadata:
       labels:
+        app: k8up-gui
         app.kubernetes.io/name: k8up-gui
     spec:
       serviceAccountName: k8up-gui
       securityContext:
         fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: gui
-          image: ghcr.io/d-kholin/k8up-gui:0.1.0 # pin; replace when publishing
+          # Distroless-like footprint not required; debian slim is public and
+          # only used as a runtime shell. App code lives on the app PVC.
+          image: docker.io/library/debian:bookworm-slim
           imagePullPolicy: IfNotPresent
+          command: ["/app/entrypoint.sh"]
           ports:
             - name: http
               containerPort: 8080
@@ -43,14 +41,23 @@ spec:
               value: argocd
             - name: AUDIT_DB_PATH
               value: /data/audit.db
+            - name: STATIC_DIR
+              value: /app/static
+            - name: RESTIC_BINARY
+              value: /app/restic
+            - name: SSL_CERT_FILE
+              value: /app/ca-certificates.crt
+            - name: SSL_CERT_DIR
+              value: /app/ssl-certs
+            - name: K8UP_GLOBAL_SECRET_NAMESPACE
+              value: k8up
+            - name: K8UP_GLOBAL_SECRET_NAME
+              value: k8up-global
             - name: AUTH_USER_HEADER
               value: X-authentik-username
             - name: AUTH_EMAIL_HEADER
               value: X-authentik-email
-            # - name: PROMETHEUS_URL
-            #   value: http://prometheus-server.monitoring.svc:80
-            # - name: GRAFANA_DASHBOARD_URL
-            #   value: https://grafana.example.com/d/k8up
+            # No DEV_AUTH_USER — identity comes from Pangolin/Authentik headers.
           readinessProbe:
             httpGet:
               path: /healthz
@@ -70,17 +77,23 @@ spec:
             limits:
               cpu: "1"
               memory: 512Mi
-          volumeMounts:
-            - name: data
-              mountPath: /data
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
             runAsNonRoot: true
             runAsUser: 65532
+            runAsGroup: 65532
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: app
+              mountPath: /app
+              readOnly: true
+            - name: data
+              mountPath: /data
       volumes:
+        - name: app
+          persistentVolumeClaim:
+            claimName: k8up-gui-app
         - name: data
           persistentVolumeClaim:
             claimName: k8up-gui-data
@@ -91,11 +104,15 @@ metadata:
   name: k8up-gui
   namespace: k8up-gui
   labels:
+    app: k8up-gui
     app.kubernetes.io/name: k8up-gui
 spec:
+  type: ClusterIP
   selector:
+    app: k8up-gui
     app.kubernetes.io/name: k8up-gui
   ports:
     - name: http
       port: 80
       targetPort: http
+      protocol: TCP

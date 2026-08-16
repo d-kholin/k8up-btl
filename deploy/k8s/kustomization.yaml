@@ -4,7 +4,11 @@ namespace: k8up-gui
 resources:
   - namespace.yaml
   - rbac.yaml
+  - pvc.yaml
   - deployment.yaml
-commonLabels:
-  app.kubernetes.io/name: k8up-gui
-  app.kubernetes.io/part-of: k8up-gui
+  - networkpolicy.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/name: k8up-gui
+      app.kubernetes.io/part-of: k8up-gui
+    includeSelectors: false

@@ -3,13 +3,16 @@ kind: ServiceAccount
 metadata:
   name: k8up-gui
   namespace: k8up-gui
+  labels:
+    app.kubernetes.io/name: k8up-gui
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: k8up-gui
+  labels:
+    app.kubernetes.io/name: k8up-gui
 rules:
-  # K8up CRDs
   - apiGroups: ["k8up.io"]
     resources:
       - schedules
@@ -20,22 +23,20 @@ rules:
       - snapshots
       - archives
       - prebackuppods
+      - podconfigs
     verbs: ["get", "list", "watch"]
   - apiGroups: ["k8up.io"]
     resources: ["restores", "backups", "checks"]
     verbs: ["create"]
-  # Workloads + PVC ownership
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
-  # Restic repo credentials (same secrets K8up uses)
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list"]
-  # Argo CD Applications (pause/resume sync)
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
     verbs: ["get", "list", "watch", "patch", "update"]
@@ -44,6 +45,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: k8up-gui
+  labels:
+    app.kubernetes.io/name: k8up-gui
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

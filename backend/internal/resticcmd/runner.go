@@ -49,10 +49,16 @@ func (r *Runner) run(ctx context.Context, repo RepoEnv, args ...string) *exec.Cm
         }
         cmd := exec.CommandContext(ctx, r.bin(), args...)
         // Clean env + only what we need. Include PATH so restic can find helpers if any.
+        // Propagate TLS trust roots so restic can verify S3/Garage HTTPS (e.g. Let's Encrypt).
         base := []string{
                 "PATH=" + os.Getenv("PATH"),
                 "HOME=" + os.Getenv("HOME"),
                 "LANG=C.UTF-8",
+        }
+        for _, k := range []string{"SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"} {
+                if v := os.Getenv(k); v != "" {
+                        base = append(base, k+"="+v)
+                }
         }
         cmd.Env = append(base, repo.Env...)
         return cmd
