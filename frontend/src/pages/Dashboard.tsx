@@ -29,27 +29,32 @@ export default function Dashboard() {
 
       {interrupted.length > 0 && (
         <div className="banner">
-          <strong>Interrupted restore — Argo sync may still be paused.</strong>
+          <strong>Interrupted restore — Argo CD controller may still be stopped.</strong>
+          <p className="muted" style={{ margin: '0.35rem 0' }}>
+            Restores pause the whole cluster&apos;s Argo reconciliation (
+            <span className="mono">argocd-application-controller</span>) until finished.
+          </p>
           <ul>
             {interrupted.map((r) => (
               <li key={r.restoreId}>
-                {r.application ? `${r.application.namespace}/${r.application.name}` : 'unknown app'} — step {r.step}
-                {r.application && (
-                  <>
-                    {' '}
-                    <button
-                      className="secondary"
-                      onClick={() =>
-                        api
-                          .resumeArgo(r.application!.namespace, r.application!.name)
-                          .then(load)
-                          .catch((e: Error) => setError(e.message))
-                      }
-                    >
-                      Resume Argo sync
-                    </button>
-                  </>
-                )}
+                {r.application
+                  ? `${r.application.namespace}/${r.application.name}`
+                  : 'global pause'}{' '}
+                — step {r.step}
+                {r.lastError && <div className="error">{r.lastError}</div>}
+                {' '}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() =>
+                    api
+                      .resumeArgo('argocd', 'application-controller')
+                      .then(load)
+                      .catch((e: Error) => setError(e.message))
+                  }
+                >
+                  Resume Argo controller
+                </button>
               </li>
             ))}
           </ul>

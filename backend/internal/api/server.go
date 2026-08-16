@@ -240,13 +240,8 @@ func (s *Server) handleResumeArgo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResumeArgoByRestore(w http.ResponseWriter, r *http.Request) {
-        id := r.PathValue("id")
-        st, ok := s.Orch.Get(id)
-        if !ok || st.Application == nil {
-                http.Error(w, "restore or argo app not found", http.StatusNotFound)
-                return
-        }
-        if err := s.Orch.ManualResumeArgo(r.Context(), st.Application.Namespace, st.Application.Name); err != nil {
+        // id is optional context; global controller resume does not need Application
+        if err := s.Orch.ManualResumeArgo(r.Context(), s.Cfg.ArgoCDNamespace, "application-controller"); err != nil {
                 s.writeErr(w, err, http.StatusBadGateway)
                 return
         }

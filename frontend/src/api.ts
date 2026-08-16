@@ -19,6 +19,8 @@ export type RestoreState = {
   pvcName?: string
   lastError?: string
   argoSyncResumed?: boolean
+  argoPausedGlobally?: boolean
+  argoControllerReplicas?: number
   application?: { namespace: string; name: string }
   startedAt?: string
   finishedAt?: string

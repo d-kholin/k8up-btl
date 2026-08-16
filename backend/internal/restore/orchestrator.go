@@ -27,31 +27,35 @@ const (
         StepFailed       Step = "failed"
 )
 
-// State is durable (annotation) + in-memory job status.
+// State is durable (controller STS annotation) + in-memory job status.
 type State struct {
-        RestoreID          string         `json:"restoreId"`
-        Application        *k8s.ArgoRef   `json:"application,omitempty"`
-        OriginalSyncPolicy map[string]any `json:"originalSyncPolicy,omitempty"`
-        Workload           *k8s.WorkloadRef `json:"workload,omitempty"`
-        OriginalReplicas   int32          `json:"originalReplicas"`
-        Step               Step           `json:"step"`
-        SnapshotID         string         `json:"snapshotId"`
-        SnapshotCR         string         `json:"snapshotCR,omitempty"`
-        PVCNamespace       string         `json:"pvcNamespace"`
-        PVCName            string         `json:"pvcName"`
-        RestoreCRName      string         `json:"restoreCRName,omitempty"`
-        StartedAt          time.Time      `json:"startedAt"`
-        FinishedAt         *time.Time     `json:"finishedAt,omitempty"`
-        LastError          string         `json:"lastError,omitempty"`
-        Actor              string         `json:"actor,omitempty"`
-        ArgoSyncResumed    *bool          `json:"argoSyncResumed,omitempty"`
-        BytesRecovered     int64          `json:"bytesRecovered,omitempty"`
+        RestoreID string `json:"restoreId"`
+        // Application is informational (owning Argo app if resolved).
+        Application *k8s.ArgoRef `json:"application,omitempty"`
+        Workload    *k8s.WorkloadRef `json:"workload,omitempty"`
+        OriginalReplicas int32 `json:"originalReplicas"`
+        // Global Argo pause: application-controller STS scaled to 0.
+        ArgoControllerReplicas int32  `json:"argoControllerReplicas,omitempty"`
+        ArgoPausedGlobally     bool   `json:"argoPausedGlobally,omitempty"`
+        Step                   Step   `json:"step"`
+        SnapshotID             string `json:"snapshotId"`
+        SnapshotCR             string `json:"snapshotCR,omitempty"`
+        PVCNamespace           string `json:"pvcNamespace"`
+        PVCName                string `json:"pvcName"`
+        RestoreCRName          string `json:"restoreCRName,omitempty"`
+        StartedAt              time.Time  `json:"startedAt"`
+        FinishedAt             *time.Time `json:"finishedAt,omitempty"`
+        LastError              string     `json:"lastError,omitempty"`
+        Actor                  string     `json:"actor,omitempty"`
+        // ArgoSyncResumed: controller scaled back up (global pause cleared).
+        ArgoSyncResumed *bool `json:"argoSyncResumed,omitempty"`
+        BytesRecovered  int64 `json:"bytesRecovered,omitempty"`
 }
 
 type Request struct {
         SnapshotNamespace string `json:"snapshotNamespace"`
-        SnapshotName      string `json:"snapshotName"` // Snapshot CR name
-        SnapshotID        string `json:"snapshotId"`   // restic id if known
+        SnapshotName      string `json:"snapshotName"`
+        SnapshotID        string `json:"snapshotId"`
         PVCNamespace      string `json:"pvcNamespace"`
         PVCName           string `json:"pvcName"`
         Actor             string `json:"actor"`
@@ -66,8 +70,8 @@ type Orchestrator struct {
         Log              *slog.Logger
         OnUpdate         func(State)
 
-        mu    sync.Mutex
-        jobs  map[string]*State
+        mu   sync.Mutex
+        jobs map[string]*State
 }
 
 func NewOrchestrator(c *k8s.Clients, argoNS string, scaleTO, restoreTO time.Duration, a *audit.Store, log *slog.Logger) *Orchestrator {
@@ -118,10 +122,9 @@ func (o *Orchestrator) set(s *State) {
         o.jobs[s.RestoreID] = s
         o.mu.Unlock()
         o.publish(s)
-        if o.Clients != nil && s.Application != nil {
+        if o.Clients != nil && s.ArgoPausedGlobally {
                 b, _ := json.Marshal(s)
-                // best-effort durable update
-                _ = o.Clients.SetPausedStateAnnotation(context.Background(), s.Application, string(b))
+                _ = o.Clients.SetArgoControllerStateAnnotation(context.Background(), o.ArgoNS, string(b))
         }
 }
 
@@ -132,6 +135,12 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
         }
         if req.PVCNamespace == "" || req.PVCName == "" {
                 return nil, fmt.Errorf("pvcNamespace and pvcName are required")
+        }
+        // Refuse if Argo is already paused by a prior restore.
+        if raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS); err == nil {
+                if raw != "" || reps == 0 {
+                        return nil, fmt.Errorf("argo application-controller already paused (replicas=%d); resume or clear restore-gui state before starting another restore", reps)
+                }
         }
         id := uuid.NewString()
         st := &State{
@@ -144,7 +153,6 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
                 StartedAt:    time.Now().UTC(),
                 Actor:        req.Actor,
         }
-        // Resolve snapshot id from CR if needed
         if st.SnapshotID == "" && req.SnapshotName != "" {
                 snap, err := o.Clients.GetSnapshot(ctx, req.SnapshotNamespace, req.SnapshotName)
                 if err != nil {
@@ -154,14 +162,10 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
                         st.SnapshotID = id
                 } else if id, ok, _ := unstructuredString(snap.Object, "status", "id"); ok {
                         st.SnapshotID = id
-                } else {
-                        // K8up Snapshot often uses status.snapshot or metadata
-                        if id, ok, _ := unstructuredString(snap.Object, "spec", "snapshot"); ok {
-                                st.SnapshotID = id
-                        }
+                } else if id, ok, _ := unstructuredString(snap.Object, "spec", "snapshot"); ok {
+                        st.SnapshotID = id
                 }
                 if st.SnapshotID == "" {
-                        // fall back to CR name — operator-specific
                         st.SnapshotID = req.SnapshotName
                 }
         }
@@ -180,25 +184,24 @@ func (o *Orchestrator) run(st *State) {
         argoPaused := false
 
         defer func() {
-                // CRITICAL: always attempt Argo resume if we paused.
-                if st.Application != nil && argoPaused {
+                // CRITICAL: always resume Argo controller if we paused it.
+                if argoPaused {
                         st.Step = StepResumingArgo
                         o.set(st)
-                        if err := o.Clients.ResumeArgoSync(ctx, st.Application, st.OriginalSyncPolicy); err != nil {
-                                o.Log.Error("failed to resume argo sync", "app", st.Application.Name, "err", err)
-                                st.LastError = joinErr(st.LastError, fmt.Errorf("resume argo: %w", err))
+                        if err := o.Clients.ResumeArgoController(ctx, o.ArgoNS, st.ArgoControllerReplicas); err != nil {
+                                o.Log.Error("failed to resume argo controller", "err", err)
+                                st.LastError = joinErr(st.LastError, fmt.Errorf("resume argo controller: %w", err))
                                 resumed := false
                                 st.ArgoSyncResumed = &resumed
+                                b, _ := json.Marshal(st)
+                                _ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, string(b))
                         } else {
                                 resumed := true
                                 st.ArgoSyncResumed = &resumed
+                                st.ArgoPausedGlobally = false
                                 argoPaused = false
+                                _ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, "")
                         }
-                } else if st.Application == nil {
-                        // n/a
-                } else if !argoPaused {
-                        resumed := true
-                        st.ArgoSyncResumed = &resumed
                 }
 
                 now := time.Now().UTC()
@@ -216,16 +219,6 @@ func (o *Orchestrator) run(st *State) {
                 o.mu.Unlock()
                 o.publish(st)
 
-                // Clear annotation on success/resume; keep on failed-still-paused
-                if st.Application != nil {
-                        if st.ArgoSyncResumed != nil && *st.ArgoSyncResumed {
-                                _ = o.Clients.SetPausedStateAnnotation(ctx, st.Application, "")
-                        } else {
-                                b, _ := json.Marshal(st)
-                                _ = o.Clients.SetPausedStateAnnotation(ctx, st.Application, string(b))
-                        }
-                }
-
                 if o.Audit != nil {
                         status := "success"
                         if st.Step == StepFailed {
@@ -236,7 +229,7 @@ func (o *Orchestrator) run(st *State) {
                                 p := !*st.ArgoSyncResumed
                                 pausedPtr = &p
                         }
-                        argoName := ""
+                        argoName := "argocd/" + k8s.ArgoApplicationControllerSTS
                         if st.Application != nil {
                                 argoName = st.Application.Namespace + "/" + st.Application.Name
                         }
@@ -270,41 +263,30 @@ func (o *Orchestrator) run(st *State) {
         }
         st.OriginalReplicas = replicas
 
-        argo, policy, err := o.Clients.ResolveArgoApp(ctx, wl, o.ArgoNS)
-        if err != nil && argo == nil {
-                runErr = err
-                return
-        }
-        // If argo ref found but get failed, abort rather than scale without pause ability
-        if err != nil && argo != nil {
-                runErr = err
-                return
-        }
-        if argo != nil {
+        // Optional: record owning Application name for UI (not used for pause).
+        if argo, _, err := o.Clients.ResolveArgoApp(ctx, wl, o.ArgoNS); err == nil && argo != nil {
                 st.Application = argo
-                st.OriginalSyncPolicy = policy
-                st.Step = StepPausingArgo
-                o.set(st)
-                b, _ := json.Marshal(st)
-                // PauseArgoSync also writes annotation
-                orig, err := o.Clients.PauseArgoSync(ctx, argo, string(b))
-                if err != nil {
-                        runErr = fmt.Errorf("pause argo: %w", err)
-                        return
-                }
-                if st.OriginalSyncPolicy == nil {
-                        st.OriginalSyncPolicy = orig
-                }
-                // Ensure pause stuck (root app-of-apps can re-apply automated from git).
-                if err := o.waitArgoPaused(ctx, argo, 15*time.Second); err != nil {
-                        runErr = err
-                        return
-                }
-                argoPaused = true
-                o.set(st)
         }
 
-        // 3. Scale down
+        // 2. Pause ALL Argo reconciliation (scale application-controller to 0).
+        st.Step = StepPausingArgo
+        o.set(st)
+        b, _ := json.Marshal(st)
+        origCtrl, err := o.Clients.PauseArgoController(ctx, o.ArgoNS, string(b))
+        if err != nil {
+                runErr = fmt.Errorf("pause argo controller: %w", err)
+                return
+        }
+        if origCtrl <= 0 {
+                origCtrl = 1
+        }
+        st.ArgoControllerReplicas = origCtrl
+        st.ArgoPausedGlobally = true
+        argoPaused = true
+        o.set(st)
+        o.Log.Info("argo application-controller paused", "originalReplicas", origCtrl)
+
+        // 3. Scale down workload
         st.Step = StepScalingDown
         o.set(st)
         scaleCtx, cancel := context.WithTimeout(ctx, o.ScaleDownTimeout)
@@ -323,14 +305,10 @@ func (o *Orchestrator) run(st *State) {
         crName := fmt.Sprintf("gui-restore-%s", st.RestoreID[:8])
         st.RestoreCRName = crName
         o.set(st)
-
-        // backend: leave empty to inherit from operator defaults when possible;
-        // production clusters usually need backend from Schedule — refined later.
         if _, err := o.Clients.CreateRestoreCR(ctx, st.PVCNamespace, crName, st.SnapshotID, st.PVCName, nil); err != nil {
                 runErr = fmt.Errorf("create restore cr: %w", err)
                 return
         }
-
         restoreCtx, cancelR := context.WithTimeout(ctx, o.RestoreTimeout)
         defer cancelR()
         if err := o.waitRestoreComplete(restoreCtx, st.PVCNamespace, crName); err != nil {
@@ -338,14 +316,14 @@ func (o *Orchestrator) run(st *State) {
                 return
         }
 
-        // 5. Scale up
+        // 5. Scale up workload
         st.Step = StepScalingUp
         o.set(st)
         if err := o.Clients.Scale(ctx, wl, st.OriginalReplicas); err != nil {
                 runErr = fmt.Errorf("scale up: %w", err)
                 return
         }
-        // step 6 handled in defer
+        // 6. Resume Argo controller — defer
 }
 
 func (o *Orchestrator) waitRestoreComplete(ctx context.Context, ns, name string) error {
@@ -357,7 +335,6 @@ func (o *Orchestrator) waitRestoreComplete(ctx context.Context, ns, name string)
                 if err != nil {
                         return err
                 }
-                // K8up conditions vary by version; check common fields
                 if conds, found, _ := nestedSlice(obj.Object, "status", "conditions"); found {
                         for _, c := range conds {
                                 m, ok := c.(map[string]any)
@@ -393,142 +370,91 @@ func (o *Orchestrator) waitRestoreComplete(ctx context.Context, ns, name string)
         }
 }
 
-// ManualResumeArgo clears a stuck pause using durable annotation or provided policy.
-func (o *Orchestrator) ManualResumeArgo(ctx context.Context, appNS, appName string) error {
-        ref := &k8s.ArgoRef{Namespace: appNS, Name: appName}
-        apps, err := o.Clients.ListInterruptedRestores(ctx, appNS)
+// ManualResumeArgo scales the application-controller back up (global unstick).
+func (o *Orchestrator) ManualResumeArgo(ctx context.Context, _appNS, _appName string) error {
+        raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS)
         if err != nil {
                 return err
         }
-        var policy map[string]any
-        for i := range apps {
-                if apps[i].GetName() != appName {
-                        continue
-                }
-                raw := apps[i].GetAnnotations()[k8s.PausedStateAnnotation]
+        orig := int32(1)
+        if raw != "" {
                 var st State
-                if err := json.Unmarshal([]byte(raw), &st); err == nil {
-                        policy = st.OriginalSyncPolicy
+                if err := json.Unmarshal([]byte(raw), &st); err == nil && st.ArgoControllerReplicas > 0 {
+                        orig = st.ArgoControllerReplicas
                 }
         }
-        if err := o.Clients.ResumeArgoSync(ctx, ref, policy); err != nil {
+        if reps > 0 && raw == "" {
+                // already running and no lock
+                return nil
+        }
+        if err := o.Clients.ResumeArgoController(ctx, o.ArgoNS, orig); err != nil {
                 return err
         }
         if o.Audit != nil {
                 _, _ = o.Audit.Insert(ctx, audit.Entry{
                         Kind:    "system",
                         Actor:   "operator",
-                        Status:  "resumed_argo",
-                        ArgoApp: appNS + "/" + appName,
+                        Status:  "resumed_argo_controller",
+                        ArgoApp: o.ArgoNS + "/" + k8s.ArgoApplicationControllerSTS,
                         Detail:  "manual resume",
                 })
         }
         return nil
 }
 
-// ScanInterrupted loads annotation state into memory on startup.
-// Stale annotations (automated already restored by ops/git) are cleared automatically.
+// ScanInterrupted loads global pause state from the controller STS annotation.
 func (o *Orchestrator) ScanInterrupted(ctx context.Context) ([]State, error) {
         if o.Clients == nil {
                 return nil, nil
         }
-        apps, err := o.Clients.ListInterruptedRestores(ctx, o.ArgoNS)
+        raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS)
         if err != nil {
                 return nil, err
         }
-        var out []State
-        for i := range apps {
-                raw := apps[i].GetAnnotations()[k8s.PausedStateAnnotation]
-                var st State
-                if err := json.Unmarshal([]byte(raw), &st); err != nil {
-                        st = State{
-                                RestoreID: "unknown",
-                                Step:      StepFailed,
-                                LastError: "corrupt paused-state annotation",
-                                Application: &k8s.ArgoRef{
-                                        Namespace: apps[i].GetNamespace(),
-                                        Name:      apps[i].GetName(),
-                                },
+        if raw == "" {
+                // Controller at 0 without our annotation — still surface a warning.
+                if reps == 0 {
+                        st := State{
+                                RestoreID:          "unknown",
+                                Step:               StepFailed,
+                                ArgoPausedGlobally: true,
+                                LastError:          "argocd-application-controller replicas=0 but no restore-gui state; Argo is fully paused",
                         }
-                }
-                if st.Application == nil {
-                        st.Application = &k8s.ArgoRef{Namespace: apps[i].GetNamespace(), Name: apps[i].GetName()}
-                }
-
-                // If automated sync is already back, the pause is gone — clear stale banner.
-                autoOn, aerr := o.Clients.ArgoAutomatedEnabled(ctx, st.Application)
-                if aerr == nil && autoOn {
-                        o.Log.Info("clearing stale restore annotation; argo automated already enabled",
-                                "app", st.Application.Name, "restoreId", st.RestoreID)
-                        _ = o.Clients.SetPausedStateAnnotation(ctx, st.Application, "")
-                        continue
-                }
-
-                // mark as interrupted for UI
-                if st.Step != StepDone {
                         resumed := false
                         st.ArgoSyncResumed = &resumed
-                        if st.LastError == "" {
-                                st.LastError = "restore was interrupted; Argo sync still paused"
-                        }
+                        return []State{st}, nil
                 }
-                o.mu.Lock()
-                if st.RestoreID != "" {
-                        cp := st
-                        o.jobs[st.RestoreID] = &cp
-                }
-                o.mu.Unlock()
-                out = append(out, st)
+                return nil, nil
         }
-        return out, nil
-}
-
-// waitArgoPaused re-checks that automated stays off (parent root self-heal race).
-func (o *Orchestrator) waitArgoPaused(ctx context.Context, ref *k8s.ArgoRef, d time.Duration) error {
-        deadline := time.Now().Add(d)
-        var lastOn bool
-        for time.Now().Before(deadline) {
-                if err := ctx.Err(); err != nil {
-                        return err
-                }
-                on, err := o.Clients.ArgoAutomatedEnabled(ctx, ref)
-                if err != nil {
-                        return fmt.Errorf("verify argo pause: %w", err)
-                }
-                lastOn = on
-                if !on {
-                        // Confirm it stays off briefly.
-                        select {
-                        case <-ctx.Done():
-                                return ctx.Err()
-                        case <-time.After(3 * time.Second):
-                        }
-                        on2, err := o.Clients.ArgoAutomatedEnabled(ctx, ref)
-                        if err != nil {
-                                return fmt.Errorf("verify argo pause: %w", err)
-                        }
-                        if !on2 {
-                                return nil
-                        }
-                        lastOn = true
-                }
-                // Re-apply pause if healed mid-wait
-                if lastOn {
-                        o.Log.Warn("argo automated reappeared; re-applying pause", "app", ref.Name)
-                        if err := o.Clients.ClearArgoAutomated(ctx, ref); err != nil {
-                                return fmt.Errorf("re-pause argo: %w", err)
-                        }
-                }
-                select {
-                case <-ctx.Done():
-                        return ctx.Err()
-                case <-time.After(2 * time.Second):
+        var st State
+        if err := json.Unmarshal([]byte(raw), &st); err != nil {
+                st = State{
+                        RestoreID: "unknown",
+                        Step:      StepFailed,
+                        LastError: "corrupt restore state on argo controller: " + err.Error(),
                 }
         }
-        if lastOn {
-                return fmt.Errorf("argo pause did not stick on %s/%s: root app-of-apps likely re-applies syncPolicy.automated from git — add ignoreDifferences for Application.spec.syncPolicy.automated on the root Application", ref.Namespace, ref.Name)
+        st.ArgoPausedGlobally = reps == 0
+        if st.Step != StepDone {
+                resumed := reps > 0
+                st.ArgoSyncResumed = &resumed
+                if reps == 0 && st.LastError == "" {
+                        st.LastError = "restore interrupted; Argo application-controller still scaled to 0"
+                }
+                if reps > 0 {
+                        // Controller already up — stale annotation only.
+                        st.LastError = "stale restore annotation on controller but Argo is running; clear annotation"
+                        _ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, "")
+                        return nil, nil
+                }
         }
-        return nil
+        o.mu.Lock()
+        if st.RestoreID != "" {
+                cp := st
+                o.jobs[st.RestoreID] = &cp
+        }
+        o.mu.Unlock()
+        return []State{st}, nil
 }
 
 func unstructuredString(obj map[string]any, fields ...string) (string, bool, error) {
