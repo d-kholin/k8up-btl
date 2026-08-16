@@ -57,7 +57,14 @@ spec:
               value: X-authentik-username
             - name: AUTH_EMAIL_HEADER
               value: X-authentik-email
-            # No DEV_AUTH_USER — identity comes from Pangolin/Authentik headers.
+            # Pangolin SSO is at the edge; identity headers often absent.
+            # Trust Newt-only ingress + edge SSO; attribute audit to DefaultUser
+            # unless Remote-User / X-authentik-* is present.
+            - name: AUTH_TRUST_EDGE
+              value: "true"
+            - name: AUTH_DEFAULT_USER
+              value: operator
+            # No DEV_AUTH_USER in cluster.
           readinessProbe:
             httpGet:
               path: /healthz
