@@ -1,0 +1,113 @@
+# Ephemeral in-cluster smoke deployment (not GitOps). Binary+static+restic
+# are copied in via kubectl cp after the pod starts.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8up-gui
+  labels:
+    app.kubernetes.io/name: k8up-gui
+    restore-gui.local/ephemeral: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8up-gui
+  namespace: k8up-gui
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8up-gui
+rules:
+  - apiGroups: ["k8up.io"]
+    resources: [schedules, backups, restores, checks, prunes, snapshots, archives, prebackuppods, podconfigs]
+    verbs: [get, list, watch]
+  - apiGroups: ["k8up.io"]
+    resources: [restores, backups, checks]
+    verbs: [create]
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list]
+  - apiGroups: ["argoproj.io"]
+    resources: [applications]
+    verbs: [get, list, watch, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8up-gui
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8up-gui
+subjects:
+  - kind: ServiceAccount
+    name: k8up-gui
+    namespace: k8up-gui
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: k8up-gui
+  namespace: k8up-gui
+  labels:
+    app.kubernetes.io/name: k8up-gui
+spec:
+  serviceAccountName: k8up-gui
+  restartPolicy: Never
+  containers:
+    - name: gui
+      # debian has ca-certs; we inject server+restic+static
+      image: debian:bookworm-slim
+      command: ["sleep", "infinity"]
+      env:
+        - name: HTTP_ADDR
+          value: ":8080"
+        - name: ARGOCD_NAMESPACE
+          value: argocd
+        - name: AUDIT_DB_PATH
+          value: /data/audit.db
+        - name: STATIC_DIR
+          value: /app/static
+        - name: RESTIC_BINARY
+          value: /app/restic
+        - name: DEV_AUTH_USER
+          value: cluster-smoke
+        - name: K8UP_GLOBAL_SECRET_NAMESPACE
+          value: k8up
+        - name: K8UP_GLOBAL_SECRET_NAME
+          value: k8up-global
+        - name: AUTH_USER_HEADER
+          value: X-authentik-username
+      ports:
+        - name: http
+          containerPort: 8080
+      volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: app
+          mountPath: /app
+  volumes:
+    - name: data
+      emptyDir: {}
+    - name: app
+      emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8up-gui
+  namespace: k8up-gui
+spec:
+  selector:
+    app.kubernetes.io/name: k8up-gui
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

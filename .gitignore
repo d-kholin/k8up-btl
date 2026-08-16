@@ -1,0 +1,34 @@
+# Binaries / build
+backend/bin/
+backend/server
+dist/
+frontend/dist/
+frontend/node_modules/
+*.exe
+*.test
+*.out
+
+# Data / secrets
+data/
+*.db
+*.db-journal
+.env
+.env.local
+*.pem
+kubeconfig
+.kube/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.hermes/
+
+# Go
+backend/vendor/
+
+# Coverage
+coverage.out
+coverage.html
+app.tgz
