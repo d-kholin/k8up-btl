@@ -351,7 +351,15 @@ func (c *Clients) ListInterruptedRestores(ctx context.Context, argoNS string) ([
 }
 
 // CreateRestoreCR creates a k8up Restore without Argo tracking labels.
+// backend should include at least s3.bucket (e.g. naku-k8up/<ns>) when using global S3 endpoint.
 func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshotID, pvcName string, backend map[string]any) (*unstructured.Unstructured, error) {
+        if backend == nil {
+                var err error
+                backend, err = c.ResolveRestoreBackend(ctx, namespace, snapshotID)
+                if err != nil {
+                        return nil, err
+                }
+        }
         spec := map[string]any{
                 "snapshot": snapshotID,
                 "restoreMethod": map[string]any{
@@ -359,7 +367,6 @@ func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshot
                                 "claimName": pvcName,
                         },
                 },
-                // Homelab Schedules always use PodConfig "backup-pod".
                 "podConfigRef": map[string]any{
                         "name": "backup-pod",
                 },
@@ -378,12 +385,66 @@ func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshot
                                         "app.kubernetes.io/managed-by": "k8up-gui",
                                         "restore-gui.local/one-shot":   "true",
                                 },
-                                // Explicitly no Argo tracking labels.
                         },
                         "spec": spec,
                 },
         }
         return c.Dynamic.Resource(GVRRestore).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
+}
+
+// ResolveRestoreBackend builds a K8up backend from the namespace Schedule or Snapshot repository URI.
+func (c *Clients) ResolveRestoreBackend(ctx context.Context, namespace, snapshotHint string) (map[string]any, error) {
+        // Prefer Schedule.spec.backend in the same namespace.
+        list, err := c.Dynamic.Resource(GVRSchedule).Namespace(namespace).List(ctx, metav1.ListOptions{})
+        if err == nil {
+                for i := range list.Items {
+                        if be, found, _ := unstructured.NestedMap(list.Items[i].Object, "spec", "backend"); found && be != nil {
+                                return be, nil
+                        }
+                }
+        }
+        // Fallback: parse Snapshot.spec.repository s3:https://host/bucket
+        snaps, err := c.Dynamic.Resource(GVRSnapshot).Namespace(namespace).List(ctx, metav1.ListOptions{})
+        if err != nil {
+                return nil, fmt.Errorf("resolve restore backend: no schedule backend and list snapshots: %w", err)
+        }
+        for i := range snaps.Items {
+                repo, _, _ := unstructured.NestedString(snaps.Items[i].Object, "spec", "repository")
+                if repo == "" {
+                        continue
+                }
+                if bucket := s3BucketFromRepo(repo); bucket != "" {
+                        return map[string]any{
+                                "s3": map[string]any{
+                                        "bucket": bucket,
+                                },
+                        }, nil
+                }
+        }
+        return nil, fmt.Errorf("could not resolve s3 bucket for namespace %s (set Schedule.spec.backend or Snapshot.spec.repository)", namespace)
+}
+
+// s3BucketFromRepo parses restic S3 URIs like s3:https://garage.example/naku-k8up/ns
+func s3BucketFromRepo(repo string) string {
+        // s3:https://host/path or s3:http://host/path
+        const pfx = "s3:"
+        if !strings.HasPrefix(repo, pfx) {
+                return ""
+        }
+        rest := strings.TrimPrefix(repo, pfx)
+        // strip scheme
+        for _, sch := range []string{"https://", "http://"} {
+                if strings.HasPrefix(rest, sch) {
+                        rest = strings.TrimPrefix(rest, sch)
+                        break
+                }
+        }
+        // host/bucket...
+        _, path, ok := strings.Cut(rest, "/")
+        if !ok || path == "" {
+                return ""
+        }
+        return strings.TrimSuffix(path, "/")
 }
 
 // CreateSimpleJobCR creates Backup or Check CR (no Argo labels).
