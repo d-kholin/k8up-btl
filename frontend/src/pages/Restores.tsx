@@ -51,28 +51,28 @@ export default function Restores() {
                 </td>
                 <td>
                   {r.step === 'done' && r.argoSyncResumed !== false && (
-                    <span className="badge ok">complete, sync resumed</span>
+                    <span className="badge ok">complete, Argo resumed</span>
                   )}
                   {r.step === 'failed' && r.argoSyncResumed && (
-                    <span className="badge warn">failed, sync resumed</span>
+                    <span className="badge warn">failed, Argo resumed</span>
                   )}
                   {r.step === 'failed' && r.argoSyncResumed === false && (
-                    <span className="badge bad">failed, sync still paused</span>
+                    <span className="badge bad">failed, Argo controller still stopped</span>
                   )}
                   {r.lastError && <div className="error">{r.lastError}</div>}
                 </td>
                 <td>
-                  {r.application && r.argoSyncResumed === false && (
+                  {r.argoSyncResumed === false && (
                     <button
                       className="danger"
                       onClick={() =>
                         api
-                          .resumeArgo(r.application!.namespace, r.application!.name)
+                          .resumeArgo('argocd', 'application-controller')
                           .then(load)
                           .catch((e: Error) => setError(e.message))
                       }
                     >
-                      Resume Argo
+                      Resume Argo controller
                     </button>
                   )}
                 </td>
