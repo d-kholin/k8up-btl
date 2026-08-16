@@ -295,6 +295,11 @@ func (o *Orchestrator) run(st *State) {
                 if st.OriginalSyncPolicy == nil {
                         st.OriginalSyncPolicy = orig
                 }
+                // Ensure pause stuck (root app-of-apps can re-apply automated from git).
+                if err := o.waitArgoPaused(ctx, argo, 15*time.Second); err != nil {
+                        runErr = err
+                        return
+                }
                 argoPaused = true
                 o.set(st)
         }
@@ -422,7 +427,11 @@ func (o *Orchestrator) ManualResumeArgo(ctx context.Context, appNS, appName stri
 }
 
 // ScanInterrupted loads annotation state into memory on startup.
+// Stale annotations (automated already restored by ops/git) are cleared automatically.
 func (o *Orchestrator) ScanInterrupted(ctx context.Context) ([]State, error) {
+        if o.Clients == nil {
+                return nil, nil
+        }
         apps, err := o.Clients.ListInterruptedRestores(ctx, o.ArgoNS)
         if err != nil {
                 return nil, err
@@ -445,6 +454,16 @@ func (o *Orchestrator) ScanInterrupted(ctx context.Context) ([]State, error) {
                 if st.Application == nil {
                         st.Application = &k8s.ArgoRef{Namespace: apps[i].GetNamespace(), Name: apps[i].GetName()}
                 }
+
+                // If automated sync is already back, the pause is gone — clear stale banner.
+                autoOn, aerr := o.Clients.ArgoAutomatedEnabled(ctx, st.Application)
+                if aerr == nil && autoOn {
+                        o.Log.Info("clearing stale restore annotation; argo automated already enabled",
+                                "app", st.Application.Name, "restoreId", st.RestoreID)
+                        _ = o.Clients.SetPausedStateAnnotation(ctx, st.Application, "")
+                        continue
+                }
+
                 // mark as interrupted for UI
                 if st.Step != StepDone {
                         resumed := false
@@ -455,12 +474,61 @@ func (o *Orchestrator) ScanInterrupted(ctx context.Context) ([]State, error) {
                 }
                 o.mu.Lock()
                 if st.RestoreID != "" {
-                        o.jobs[st.RestoreID] = &st
+                        cp := st
+                        o.jobs[st.RestoreID] = &cp
                 }
                 o.mu.Unlock()
                 out = append(out, st)
         }
         return out, nil
+}
+
+// waitArgoPaused re-checks that automated stays off (parent root self-heal race).
+func (o *Orchestrator) waitArgoPaused(ctx context.Context, ref *k8s.ArgoRef, d time.Duration) error {
+        deadline := time.Now().Add(d)
+        var lastOn bool
+        for time.Now().Before(deadline) {
+                if err := ctx.Err(); err != nil {
+                        return err
+                }
+                on, err := o.Clients.ArgoAutomatedEnabled(ctx, ref)
+                if err != nil {
+                        return fmt.Errorf("verify argo pause: %w", err)
+                }
+                lastOn = on
+                if !on {
+                        // Confirm it stays off briefly.
+                        select {
+                        case <-ctx.Done():
+                                return ctx.Err()
+                        case <-time.After(3 * time.Second):
+                        }
+                        on2, err := o.Clients.ArgoAutomatedEnabled(ctx, ref)
+                        if err != nil {
+                                return fmt.Errorf("verify argo pause: %w", err)
+                        }
+                        if !on2 {
+                                return nil
+                        }
+                        lastOn = true
+                }
+                // Re-apply pause if healed mid-wait
+                if lastOn {
+                        o.Log.Warn("argo automated reappeared; re-applying pause", "app", ref.Name)
+                        if err := o.Clients.ClearArgoAutomated(ctx, ref); err != nil {
+                                return fmt.Errorf("re-pause argo: %w", err)
+                        }
+                }
+                select {
+                case <-ctx.Done():
+                        return ctx.Err()
+                case <-time.After(2 * time.Second):
+                }
+        }
+        if lastOn {
+                return fmt.Errorf("argo pause did not stick on %s/%s: root app-of-apps likely re-applies syncPolicy.automated from git — add ignoreDifferences for Application.spec.syncPolicy.automated on the root Application", ref.Namespace, ref.Name)
+        }
+        return nil
 }
 
 func unstructuredString(obj map[string]any, fields ...string) (string, bool, error) {

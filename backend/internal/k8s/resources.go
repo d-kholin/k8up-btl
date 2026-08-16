@@ -2,6 +2,7 @@ package k8s
 
 import (
         "context"
+        "encoding/json"
         "fmt"
         "strings"
 
@@ -209,18 +210,19 @@ func sleepCh(ctx context.Context, ns int64) <-chan struct{} {
         return ch
 }
 
-// PauseArgoSync nulls spec.syncPolicy.automated and writes durable state annotation.
+// PauseArgoSync removes spec.syncPolicy.automated and writes durable state annotation.
+// originalPolicy is a deep copy of the prior full syncPolicy (including automated).
+// Caller should verify the pause stuck (root app-of-apps can re-heal automated unless
+// ignoreDifferences is configured on root).
 func (c *Clients) PauseArgoSync(ctx context.Context, ref *ArgoRef, stateJSON string) (originalPolicy map[string]any, err error) {
         app, err := c.Dynamic.Resource(GVRArgoApp).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
         if err != nil {
                 return nil, err
         }
-        policy, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy")
-        // deep-ish copy via re-marshal is done by caller; keep raw map
-        originalPolicy = policy
-
-        // Remove automated only
-        if policy != nil {
+        policy, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy")
+        if found && policy != nil {
+                // Deep copy BEFORE mutating — NestedMap is already a deep copy; keep for resume.
+                originalPolicy = deepCopyMap(policy)
                 delete(policy, "automated")
                 if err := unstructured.SetNestedMap(app.Object, policy, "spec", "syncPolicy"); err != nil {
                         return nil, err
@@ -235,6 +237,56 @@ func (c *Clients) PauseArgoSync(ctx context.Context, ref *ArgoRef, stateJSON str
 
         _, err = c.Dynamic.Resource(GVRArgoApp).Namespace(ref.Namespace).Update(ctx, app, metav1.UpdateOptions{})
         return originalPolicy, err
+}
+
+// ArgoAutomatedEnabled reports whether Application has syncPolicy.automated set.
+func (c *Clients) ArgoAutomatedEnabled(ctx context.Context, ref *ArgoRef) (bool, error) {
+        app, err := c.Dynamic.Resource(GVRArgoApp).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+        if err != nil {
+                return false, err
+        }
+        auto, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+        return found && auto != nil, nil
+}
+
+// ClearArgoAutomated removes syncPolicy.automated without touching other fields/annotations.
+func (c *Clients) ClearArgoAutomated(ctx context.Context, ref *ArgoRef) error {
+        app, err := c.Dynamic.Resource(GVRArgoApp).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+        if err != nil {
+                return err
+        }
+        policy, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy")
+        if !found || policy == nil {
+                return nil
+        }
+        if _, has := policy["automated"]; !has {
+                return nil
+        }
+        delete(policy, "automated")
+        if err := unstructured.SetNestedMap(app.Object, policy, "spec", "syncPolicy"); err != nil {
+                return err
+        }
+        _, err = c.Dynamic.Resource(GVRArgoApp).Namespace(ref.Namespace).Update(ctx, app, metav1.UpdateOptions{})
+        return err
+}
+
+func deepCopyMap(in map[string]any) map[string]any {
+        if in == nil {
+                return nil
+        }
+        b, err := json.Marshal(in)
+        if err != nil {
+                out := map[string]any{}
+                for k, v := range in {
+                        out[k] = v
+                }
+                return out
+        }
+        var out map[string]any
+        if err := json.Unmarshal(b, &out); err != nil {
+                return map[string]any{}
+        }
+        return out
 }
 
 // ResumeArgoSync restores automated policy and clears annotation.
