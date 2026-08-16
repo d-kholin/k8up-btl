@@ -76,13 +76,24 @@ export type StorageStats = {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers || {}),
-    },
-  })
+  let res: Response
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers || {}),
+      },
+    })
+  } catch (e) {
+    // Normalize aborts so callers can ignore superseded navigations.
+    if (init?.signal?.aborted) {
+      const err = new Error('Aborted')
+      err.name = 'AbortError'
+      throw err
+    }
+    throw e
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || res.statusText)
@@ -115,10 +126,17 @@ export const api = {
   interrupted: () => req<RestoreState[]>('/api/v1/interrupted'),
   resumeArgo: (ns: string, name: string) =>
     req<{ status: string }>(`/api/v1/argo/${ns}/${name}/resume`, { method: 'POST' }),
-  files: (ns: string, name: string, path = '/') =>
-    req<FileNode[]>(`/api/v1/snapshots/${ns}/${name}/files?path=${encodeURIComponent(path)}`),
-  downloadUrl: (ns: string, name: string, path: string) =>
-    `/api/v1/snapshots/${ns}/${name}/download?path=${encodeURIComponent(path)}`,
+  files: (ns: string, name: string, path = '/', signal?: AbortSignal) =>
+    req<FileNode[]>(`/api/v1/snapshots/${ns}/${name}/files?path=${encodeURIComponent(path)}`, {
+      signal,
+    }),
+  downloadUrl: (ns: string, name: string, path: string, opts?: { archive?: 'zip' | 'tar'; folder?: boolean }) => {
+    const q = new URLSearchParams()
+    q.set('path', path || '/')
+    if (opts?.archive) q.set('archive', opts.archive)
+    if (opts?.folder) q.set('folder', '1')
+    return `/api/v1/snapshots/${ns}/${name}/download?${q.toString()}`
+  },
   audit: (kind?: string) =>
     req<AuditEntry[]>(`/api/v1/audit${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>

@@ -55,8 +55,7 @@ export default function App() {
       <aside className="flex w-56 shrink-0 flex-col border-r bg-card/40 px-3 py-5">
         <div className="mb-6 flex items-start justify-between gap-2 px-2">
           <div>
-            <div className="text-sm font-semibold tracking-wide">K8up GUI</div>
-            <div className="text-xs text-muted-foreground">Backup & restore</div>
+            <div className="text-sm font-semibold tracking-wide">k8up btl</div>
           </div>
           <Button
             type="button"
@@ -77,8 +76,8 @@ export default function App() {
               end={item.end}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-                  isActive && 'bg-accent text-foreground',
+                  'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-row-hover hover:text-row-hover-foreground',
+                  isActive && 'bg-accent font-medium text-accent-foreground',
                 )
               }
             >

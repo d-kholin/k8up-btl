@@ -327,21 +327,56 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ns := r.PathValue("namespace")
 	name := r.PathValue("name")
 	p := r.URL.Query().Get("path")
-	if p == "" || p == "/" {
-		http.Error(w, "path query required", http.StatusBadRequest)
+	if p == "" {
+		p = "/"
+	}
+	p = resticcmd.NormalizeBrowsePath(p)
+	archive := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("archive")))
+	// folder=1 or archive=zip|tar → directory / full-snapshot archive dump
+	if r.URL.Query().Get("folder") == "1" && archive == "" {
+		archive = "zip"
+	}
+	switch archive {
+	case "", "zip", "tar":
+	default:
+		http.Error(w, `archive must be zip or tar`, http.StatusBadRequest)
 		return
 	}
+	// Whole snapshot always needs an archive format.
+	if p == "/" && archive == "" {
+		archive = "zip"
+	}
+
 	repo, snapID, err := s.repoEnvForSnapshot(r.Context(), ns, name)
 	if err != nil {
 		s.writeErr(w, err, http.StatusBadRequest)
 		return
 	}
-	base := path.Base(p)
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, base))
+
+	filename, contentType := downloadFilename(ns, name, snapID, p, archive)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	// Hint proxies not to buffer entire archive.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
 	cw := &countingWriter{w: w}
-	if err := s.Restic.Dump(r.Context(), repo, snapID, p, cw); err != nil {
-		s.Log.Error("dump failed", "err", err)
+	if err := s.Restic.Dump(r.Context(), repo, snapID, p, cw, resticcmd.DumpOptions{Archive: archive}); err != nil {
+		s.Log.Error("dump failed", "err", err, "path", p, "archive", archive)
+		// Headers may already be flushed; best-effort error surface.
+		if cw.n == 0 {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
+		if s.Audit != nil {
+			_, _ = s.Audit.Insert(r.Context(), audit.Entry{
+				Kind:      "download",
+				Actor:     u.Username,
+				Namespace: ns,
+				Snapshot:  snapID,
+				Path:      p,
+				Status:    "error",
+				Detail:    err.Error(),
+			})
+		}
 		return
 	}
 	if s.Audit != nil {
@@ -353,8 +388,75 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 			Path:      p,
 			Status:    "success",
 			Bytes:     cw.n,
+			Detail:    archiveLabel(archive),
 		})
 	}
+}
+
+func archiveLabel(archive string) string {
+	if archive == "" {
+		return "file"
+	}
+	return "archive:" + archive
+}
+
+// downloadFilename builds a safe Content-Disposition filename.
+func downloadFilename(ns, snapName, snapID, browsePath, archive string) (filename, contentType string) {
+	contentType = "application/octet-stream"
+	ext := ""
+	switch archive {
+	case "zip":
+		ext = ".zip"
+		contentType = "application/zip"
+	case "tar":
+		ext = ".tar"
+		contentType = "application/x-tar"
+	}
+
+	var base string
+	switch {
+	case browsePath == "/" || browsePath == "":
+		id := snapID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		if id == "" {
+			id = snapName
+		}
+		base = fmt.Sprintf("%s-%s-snapshot", sanitizeFilename(ns), sanitizeFilename(id))
+	default:
+		base = sanitizeFilename(path.Base(browsePath))
+		if base == "" || base == "." || base == "/" {
+			base = "download"
+		}
+	}
+	if ext != "" && !strings.HasSuffix(strings.ToLower(base), ext) {
+		base += ext
+	}
+	return base, contentType
+}
+
+func sanitizeFilename(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "download"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		case r == ' ' || r == '/' || r == '\\':
+			b.WriteByte('-')
+		default:
+			// drop
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if out == "" {
+		return "download"
+	}
+	return out
 }
 
 type countingWriter struct {

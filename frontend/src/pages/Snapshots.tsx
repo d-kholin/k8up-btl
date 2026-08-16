@@ -177,7 +177,7 @@ export default function Snapshots() {
           <Card key={g.namespace}>
             <button
               type="button"
-              className="flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-muted/30"
+              className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-row-hover"
               onClick={() => setExpanded((e) => ({ ...e, [g.namespace]: !open }))}
             >
               {open ? (

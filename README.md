@@ -1,6 +1,7 @@
-# k8up-gui
+# k8up btl (ketchup bottle)
 
 Web GUI for [K8up](https://k8up.io/) backup visibility and **Argo CD-aware** one-click restores.
+Formerly referred to as k8up-gui; product name is **k8up btl**.
 
 **Status:** greenfield scaffold (v0). Core restore orchestration, API surface, UI shell, and in-cluster manifests are in place; live cluster wiring and Prometheus metric names still need validation (see open questions in the PRD).
 

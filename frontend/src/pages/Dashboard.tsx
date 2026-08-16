@@ -251,7 +251,7 @@ export default function Dashboard() {
           icon={Clock3}
         />
         <StatCard
-          title="GUI restores"
+          title="btl restores"
           value={loading ? '…' : `${stats.restoreOk} ok`}
           hint={stats.restoreFail ? `${stats.restoreFail} failed (audit)` : 'no failures in audit'}
           icon={History}
