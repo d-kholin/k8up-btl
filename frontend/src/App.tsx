@@ -56,7 +56,6 @@ export default function App() {
         <div className="mb-6 flex items-start justify-between gap-2 px-2">
           <div>
             <div className="text-sm font-semibold tracking-wide">k8up btl</div>
-            <div className="text-xs text-muted-foreground">ketchup bottle</div>
           </div>
           <Button
             type="button"
