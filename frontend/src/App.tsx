@@ -77,8 +77,8 @@ export default function App() {
               end={item.end}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-                  isActive && 'bg-accent text-foreground',
+                  'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-row-hover hover:text-row-hover-foreground',
+                  isActive && 'bg-accent font-medium text-accent-foreground',
                 )
               }
             >

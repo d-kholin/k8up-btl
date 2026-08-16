@@ -167,7 +167,7 @@ export default function Browser() {
                     <button
                       type="button"
                       onClick={() => navigateTo(c.path)}
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-primary transition-colors hover:bg-accent hover:underline"
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-primary transition-colors hover:bg-row-hover hover:underline"
                     >
                       {i === 0 ? <Home className="h-3.5 w-3.5" /> : null}
                       {c.label}
@@ -224,7 +224,7 @@ export default function Browser() {
 
               {!loading && path !== '/' && (
                 <TableRow
-                  className="cursor-pointer hover:bg-accent/50"
+                  className="cursor-pointer hover:bg-row-hover"
                   onClick={() => {
                     const parent = path.replace(/\/?[^/]+$/, '') || '/'
                     navigateTo(parent)
@@ -248,7 +248,7 @@ export default function Browser() {
                 return (
                   <TableRow
                     key={full}
-                    className={cn(isDir && 'cursor-pointer hover:bg-accent/50')}
+                    className={cn(isDir && 'cursor-pointer hover:bg-row-hover')}
                     onClick={isDir ? () => navigateTo(full) : undefined}
                   >
                     <TableCell className="font-mono text-xs">

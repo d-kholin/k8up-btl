@@ -8,20 +8,24 @@
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
-    --primary: 221 83% 45%;
+    --primary: 221 83% 40%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
+    --secondary: 214 32% 92%;
     --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    /* Darker muted text for light-mode readability */
-    --muted-foreground: 215 20% 32%;
-    --accent: 210 40% 96%;
+    --muted: 214 28% 92%;
+    /* Darker muted text for light-mode readability (≈4.6:1 on white) */
+    --muted-foreground: 215 22% 28%;
+    /* Hover/active fill — clearly distinct from card/bg (non-text UI ~3:1-ish delta) */
+    --accent: 221 55% 90%;
     --accent-foreground: 222 47% 11%;
-    --destructive: 0 72% 45%;
+    /* Dedicated interactive row/list hover (full opacity; do not stack /30-/50) */
+    --row-hover: 221 70% 93%;
+    --row-hover-foreground: 222 47% 11%;
+    --destructive: 0 72% 42%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 84%;
-    --input: 214 32% 84%;
-    --ring: 221 83% 45%;
+    --border: 214 28% 78%;
+    --input: 214 28% 78%;
+    --ring: 221 83% 40%;
     --radius: 0.6rem;
     --log-bg: 222 47% 8%;
     --log-fg: 142 70% 80%;
@@ -32,19 +36,21 @@
     --foreground: 210 40% 96%;
     --card: 222 40% 9%;
     --card-foreground: 210 40% 96%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 217 20% 16%;
+    --primary: 213 94% 68%;
+    --primary-foreground: 222 47% 8%;
+    --secondary: 217 24% 18%;
     --secondary-foreground: 210 40% 96%;
-    --muted: 217 20% 14%;
-    --muted-foreground: 215 16% 65%;
-    --accent: 217 25% 18%;
-    --accent-foreground: 210 40% 96%;
-    --destructive: 0 72% 51%;
+    --muted: 217 22% 16%;
+    --muted-foreground: 215 16% 72%;
+    --accent: 217 32% 24%;
+    --accent-foreground: 210 40% 98%;
+    --row-hover: 217 36% 22%;
+    --row-hover-foreground: 210 40% 98%;
+    --destructive: 0 72% 55%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217 20% 18%;
-    --input: 217 20% 18%;
-    --ring: 217 91% 60%;
+    --border: 217 20% 26%;
+    --input: 217 20% 26%;
+    --ring: 213 94% 68%;
     --log-bg: 0 0% 0% / 0.4;
     --log-fg: 142 70% 85%;
   }

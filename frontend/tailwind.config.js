@@ -30,6 +30,10 @@ export default {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
         },
+        'row-hover': {
+          DEFAULT: 'hsl(var(--row-hover))',
+          foreground: 'hsl(var(--row-hover-foreground))',
+        },
         card: {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
