@@ -14,9 +14,14 @@ function systemPrefersDark() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches
 }
 
+const THEME_KEY = 'k8up-btl-theme'
+const LEGACY_THEME_KEY = 'k8up-gui-theme'
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = localStorage.getItem('k8up-gui-theme') as Theme | null
+    const saved =
+      (localStorage.getItem(THEME_KEY) as Theme | null) ||
+      (localStorage.getItem(LEGACY_THEME_KEY) as Theme | null)
     if (saved === 'light' || saved === 'dark') return saved
     return systemPrefersDark() ? 'dark' : 'light'
   })
@@ -24,7 +29,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const root = document.documentElement
     root.classList.toggle('dark', theme === 'dark')
-    localStorage.setItem('k8up-gui-theme', theme)
+    localStorage.setItem(THEME_KEY, theme)
+    localStorage.removeItem(LEGACY_THEME_KEY)
   }, [theme])
 
   const value = useMemo(

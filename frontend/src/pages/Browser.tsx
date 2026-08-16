@@ -10,7 +10,7 @@ import {
   Loader2,
   Package,
 } from 'lucide-react'
-import { api, type FileNode } from '../api'
+import { api, type FileNode, type K8sObject } from '../api'
 import { cn, formatBytes } from '../lib/utils'
 import { Alert } from '../components/ui/alert'
 import { Button } from '../components/ui/button'
@@ -38,6 +38,81 @@ function normalizePath(p: string): string {
   return withSlash.replace(/\/+$/, '') || '/'
 }
 
+/** True when last segment looks like a file (has an extension). */
+function looksLikeFilePath(p: string): boolean {
+  const base = p.split('/').filter(Boolean).pop() || ''
+  if (!base || base.startsWith('.')) return false
+  const dot = base.lastIndexOf('.')
+  return dot > 0 && dot < base.length - 1
+}
+
+/**
+ * Prefer snapshot spec.paths (K8up backup roots, often /data/<pvc>).
+ * Cap at two path segments — that's where workload data usually lives.
+ * File paths land on their parent so the file is visible in the listing.
+ */
+export function defaultPathFromSnapshotPaths(paths: string[] | undefined): string | null {
+  if (!paths?.length) return null
+  let p = normalizePath(paths[0])
+  if (looksLikeFilePath(p)) {
+    const parent = p.replace(/\/?[^/]+$/, '') || '/'
+    return parent === p ? '/' : parent
+  }
+  const parts = p.split('/').filter(Boolean)
+  if (parts.length === 0) return null
+  if (parts.length > 2) {
+    return `/${parts.slice(0, 2).join('/')}`
+  }
+  return p
+}
+
+function snapPaths(snap: K8sObject | undefined): string[] {
+  const spec = snap?.spec as { paths?: string[] } | undefined
+  return Array.isArray(spec?.paths) ? spec!.paths! : []
+}
+
+/** Walk single-child directory chain up to maxDepth (fallback when paths missing). */
+async function descendSingleChildDirs(
+  ns: string,
+  name: string,
+  maxDepth: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  let cur = '/'
+  for (let i = 0; i < maxDepth; i++) {
+    const nodes = await api.files(ns, name, cur, signal)
+    const dirs = nodes.filter((n) => n.type === 'dir')
+    // Only auto-enter when the listing is a single directory (pure nesting).
+    if (dirs.length !== 1 || nodes.length !== 1) break
+    const next = normalizePath(dirs[0].path || `${cur === '/' ? '' : cur}/${dirs[0].name}`)
+    if (next === cur) break
+    cur = next
+  }
+  return cur
+}
+
+async function resolveInitialBrowsePath(
+  ns: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    const snaps = await api.snapshots(ns)
+    const snap = snaps.find((s) => s.name === name)
+    const fromSpec = defaultPathFromSnapshotPaths(snapPaths(snap))
+    if (fromSpec && fromSpec !== '/') {
+      return fromSpec
+    }
+  } catch {
+    // fall through to tree walk
+  }
+  try {
+    return await descendSingleChildDirs(ns, name, 2, signal)
+  } catch {
+    return '/'
+  }
+}
+
 export default function Browser() {
   const { ns = '', name = '' } = useParams()
   const [path, setPath] = useState('/')
@@ -45,7 +120,10 @@ export default function Browser() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [pendingPath, setPendingPath] = useState<string | null>(null)
+  const [bootstrapping, setBootstrapping] = useState(true)
   const reqSeq = useRef(0)
+  /** After user navigates, stop re-applying the default data root. */
+  const userNavigated = useRef(false)
 
   const crumbs = useMemo(() => breadcrumbs(path), [path])
   const folderZipUrl = useMemo(
@@ -57,13 +135,40 @@ export default function Browser() {
     [ns, name],
   )
 
+  // Once per snapshot: land on data root (spec.paths or 2-level single-dir walk).
   useEffect(() => {
+    userNavigated.current = false
+    setBootstrapping(true)
+    setPath('/')
+    const ac = new AbortController()
+    let cancelled = false
+    resolveInitialBrowsePath(ns, name, ac.signal)
+      .then((p) => {
+        if (cancelled || userNavigated.current) return
+        setPath(p)
+      })
+      .catch((e: Error) => {
+        if (cancelled || e.name === 'AbortError') return
+        if (!userNavigated.current) setPath('/')
+      })
+      .finally(() => {
+        if (!cancelled) setBootstrapping(false)
+      })
+    return () => {
+      cancelled = true
+      ac.abort()
+    }
+  }, [ns, name])
+
+  useEffect(() => {
+    // Avoid listing `/` only to immediately jump; still list once bootstrap settles.
+    if (bootstrapping && path === '/') return
+
     const seq = ++reqSeq.current
     const ac = new AbortController()
     setLoading(true)
     setError('')
     setPendingPath(path)
-    // Clear rows immediately so navigation feels intentional, not stuck.
     setNodes([])
 
     api
@@ -87,10 +192,12 @@ export default function Browser() {
     return () => {
       ac.abort()
     }
-  }, [ns, name, path])
+  }, [ns, name, path, bootstrapping])
 
   function navigateTo(next: string) {
     const n = normalizePath(next)
+    userNavigated.current = true
+    setBootstrapping(false)
     if (n === path && !loading) return
     setPath(n)
   }
@@ -124,10 +231,10 @@ export default function Browser() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-sm font-normal text-muted-foreground">Path</CardTitle>
             <div className="flex flex-wrap items-center gap-2">
-              {loading && (
+              {(loading || bootstrapping) && (
                 <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Loading{pendingPath ? ` ${pendingPath}` : '…'}
+                  {bootstrapping ? 'Opening data path…' : `Loading${pendingPath ? ` ${pendingPath}` : '…'}`}
                 </span>
               )}
               <Button asChild size="sm" variant="secondary">
@@ -178,12 +285,12 @@ export default function Browser() {
             })}
           </nav>
           <p className="text-xs text-muted-foreground">
-            Folders and full snapshots download as zip streams from restic (read-only). Large trees can take a while
-            and will keep transferring until complete.
+            Opens at the backup data path (usually two levels down). Use breadcrumbs or .. to go up. Folders/snapshots
+            download as zip streams from restic (read-only).
           </p>
         </CardHeader>
         <CardContent className="relative min-h-[12rem]">
-          {loading && (
+          {(loading || bootstrapping) && (
             <div
               className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center bg-card/60 pt-16 backdrop-blur-[1px]"
               aria-busy="true"
@@ -191,7 +298,7 @@ export default function Browser() {
             >
               <div className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground shadow-sm">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                Fetching directory…
+                {bootstrapping ? 'Finding data path…' : 'Fetching directory…'}
               </div>
             </div>
           )}
@@ -205,7 +312,7 @@ export default function Browser() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading &&
+              {(loading || bootstrapping) &&
                 nodes.length === 0 &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={`sk-${i}`} className="animate-pulse">
@@ -222,7 +329,7 @@ export default function Browser() {
                   </TableRow>
                 ))}
 
-              {!loading && path !== '/' && (
+              {!loading && !bootstrapping && path !== '/' && (
                 <TableRow
                   className="cursor-pointer hover:bg-row-hover"
                   onClick={() => {
@@ -294,7 +401,7 @@ export default function Browser() {
                 )
               })}
 
-              {!loading && nodes.length === 0 && (
+              {!loading && !bootstrapping && nodes.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4} className="text-muted-foreground">
                     Empty or unavailable.

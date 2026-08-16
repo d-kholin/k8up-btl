@@ -55,8 +55,8 @@ export default function App() {
       <aside className="flex w-56 shrink-0 flex-col border-r bg-card/40 px-3 py-5">
         <div className="mb-6 flex items-start justify-between gap-2 px-2">
           <div>
-            <div className="text-sm font-semibold tracking-wide">K8up GUI</div>
-            <div className="text-xs text-muted-foreground">Backup & restore</div>
+            <div className="text-sm font-semibold tracking-wide">k8up btl</div>
+            <div className="text-xs text-muted-foreground">ketchup bottle</div>
           </div>
           <Button
             type="button"
