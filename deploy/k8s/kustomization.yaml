@@ -14,4 +14,6 @@ labels:
     includeSelectors: false
 images:
   - name: ghcr.io/d-kholin/k8up-btl
-    newTag: "1.1.0"
+    # Reference manifests only — set a real tag here (or via kustomize edit).
+    # The live cluster pin is managed in k3s-hl (apps/k8up-btl/manifests).
+    newTag: "1.x.x"
