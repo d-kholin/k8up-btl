@@ -13,6 +13,8 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  # needed so GITHUB_TOKEN can flip package visibility after first publish
+  # (repo-linked packages only; see "Ensure GHCR package is public" step)
 
 env:
   REGISTRY: ghcr.io
@@ -79,3 +81,33 @@ jobs:
             echo ""
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure GHCR package is public
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Prefer gh; fall back to curl. Packages must be linked to this repo.
+          if command -v gh >/dev/null; then
+            gh api --method PUT \
+              -H "Accept: application/vnd.github+json" \
+              "/user/packages/container/k8up-btl/visibility" \
+              -f visibility=public \
+              && echo "package set public via /user" && exit 0 || true
+            gh api --method PUT \
+              -H "Accept: application/vnd.github+json" \
+              "/users/${{ github.repository_owner }}/packages/container/k8up-btl/visibility" \
+              -f visibility=public \
+              && echo "package set public via /users" && exit 0 || true
+          fi
+          code=$(curl -sS -o /tmp/vis.out -w "%{http_code}" -X PUT \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/user/packages/container/k8up-btl/visibility" \
+            -d '{"visibility":"public"}' || true)
+          echo "curl visibility HTTP $code: $(cat /tmp/vis.out || true)"
+          if [ "$code" != "204" ] && [ "$code" != "200" ]; then
+            echo "::warning::Could not set package public via API (HTTP $code). Set visibility manually: https://github.com/users/${{ github.repository_owner }}/packages/container/package/k8up-btl"
+          fi
