@@ -1,20 +1,4 @@
-# App binaries (server, restic, static, CA bundle). Populated by the
-# bootstrap Job once; survives pod restarts. No private image registry required.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: k8up-gui-app
-  namespace: k8up-gui
-  labels:
-    app.kubernetes.io/name: k8up-gui
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: longhorn
-  resources:
-    requests:
-      storage: 1Gi
----
-# SQLite audit DB
+# SQLite audit + durable restore job metadata.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -22,6 +6,8 @@ metadata:
   namespace: k8up-gui
   labels:
     app.kubernetes.io/name: k8up-gui
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: longhorn

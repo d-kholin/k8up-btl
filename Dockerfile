@@ -1,32 +1,56 @@
-# Build frontend
-FROM node:22-alpine AS frontend
+# syntax=docker/dockerfile:1.7
+
+# ---- frontend ----
+FROM node:22-bookworm-slim AS frontend
 WORKDIR /src
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Build backend
+# ---- backend ----
 FROM golang:1.24-bookworm AS backend
 WORKDIR /src
-COPY backend/go.mod backend/go.sum* ./
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
-# Runtime
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl restic \
+# ---- restic (pinned) ----
+FROM debian:bookworm-slim AS restic
+ARG RESTIC_VERSION=0.18.0
+# Buildx sets TARGETARCH; default for plain `docker build`.
+ARG TARGETARCH=amd64
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl bzip2 \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd -r -u 65532 -d /home/nonroot nonroot
+  && arch="$TARGETARCH" \
+  && case "$arch" in amd64|arm64) ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
+  && curl -fsSL "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${arch}.bz2" \
+    | bunzip2 > /out/restic \
+  && chmod 0755 /out/restic \
+  && /out/restic version
+
+# ---- runtime ----
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
+
 COPY --from=backend /out/server /app/server
 COPY --from=frontend /src/dist /app/static
-RUN mkdir -p /data && chown -R nonroot:nonroot /data /app
-USER nonroot
-ENV STATIC_DIR=/app/static \
+COPY --from=restic /out/restic /app/restic
+# Distroless image already ships a CA bundle; restic inherits the process env.
+# Prefer explicit path so cleaned subprocess envs still verify LE certs.
+COPY --from=restic /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+ENV HTTP_ADDR=:8080 \
+    STATIC_DIR=/app/static \
     AUDIT_DB_PATH=/data/audit.db \
-    HTTP_ADDR=:8080
+    RESTIC_BINARY=/app/restic \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PATH=/app
+
+USER nonroot:nonroot
 EXPOSE 8080
 VOLUME ["/data"]
+
 ENTRYPOINT ["/app/server"]

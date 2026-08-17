@@ -10,5 +10,12 @@ resources:
 labels:
   - pairs:
       app.kubernetes.io/name: k8up-gui
-      app.kubernetes.io/part-of: k8up-gui
+      app.kubernetes.io/part-of: k8up-btl
     includeSelectors: false
+images:
+  - name: ghcr.io/d-kholin/k8up-btl
+    newTag: latest
+# After first publish, prefer digest pin:
+# images:
+#   - name: ghcr.io/d-kholin/k8up-btl
+#     digest: sha256:...
