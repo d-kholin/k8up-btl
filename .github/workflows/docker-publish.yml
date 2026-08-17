@@ -1,5 +1,9 @@
 name: docker-publish
 
+# Main pushes publish `latest` (test channel); v* tags publish semver (prod —
+# Renovate in k3s-hl follows these). PRs get a validation build without
+# pushing. A main+tag push of the same commit triggers two runs; the
+# sha-keyed concurrency group serializes them so the second is ~all cache hits.
 on:
   push:
     branches: [main]
@@ -7,6 +11,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -28,9 +36,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -47,6 +52,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # latest tracks the tip of main (test channel); semver tags are the
+          # prod channel.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
@@ -60,7 +67,9 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          # amd64 only for now — re-adding arm64 is cheap since the Dockerfile
+          # cross-compiles (no QEMU), just extend this list.
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
