@@ -1,4 +1,4 @@
-# AGENTS.md — k8up-gui
+# AGENTS.md — k8up-btl
 
 ## Purpose
 
