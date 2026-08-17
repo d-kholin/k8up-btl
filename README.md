@@ -92,18 +92,23 @@ npm run dev
 
 ## Deploy (cluster)
 
+Published image: **`ghcr.io/d-kholin/k8up-btl`** (multi-arch amd64/arm64 via GitHub Actions).
+
 Manifests under `deploy/k8s/` assume:
 
 - Single cluster, cluster-scoped RBAC for K8up CRDs
 - Argo CD Applications in `argocd`
-- PVC for SQLite audit DB
-- Image built from root `Dockerfile` (includes `restic`)
-
-Wire the Service behind Pangolin/Traefik + Authentik forward-auth like other homelab apps. Commit manifests to your GitOps repo (or point Argo at this repo) — **not** the transient Restore CRs this app creates.
+- PVC for SQLite audit DB only (`k8up-gui-data`)
+- Nodes can pull the GHCR image (public package, or pull secret if private)
 
 ```bash
 kubectl apply -k deploy/k8s
+kubectl -n k8up-gui rollout status deploy/k8up-gui
 ```
+
+Wire the Service behind Pangolin/Newt (ClusterIP `k8up-gui.k8up-gui.svc:80`). Full steps, pin tags/digests, and migration off the old PVC-seed path: [`docs/deploy.md`](docs/deploy.md).
+
+Do **not** GitOps-track transient Restore CRs this app creates.
 
 ## Security notes
 

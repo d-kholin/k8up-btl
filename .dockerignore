@@ -1,0 +1,35 @@
+# Build context hygiene
+.git
+.github
+.hermes
+.idea
+.vscode
+**/.DS_Store
+
+# Local deps / build outputs
+frontend/node_modules
+frontend/dist
+backend/bin
+backend/vendor
+data
+*.db
+*.db-journal
+app.tgz
+coverage.out
+coverage.html
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+kubeconfig
+.kube
+
+# Docs / non-runtime
+docs
+deploy/ephemeral-smoke.yaml
+*.md
+!README.md
+AGENTS.md
+Makefile

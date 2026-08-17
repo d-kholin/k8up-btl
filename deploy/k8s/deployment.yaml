@@ -24,13 +24,14 @@ spec:
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: gui
-          # Distroless-like footprint not required; debian slim is public and
-          # only used as a runtime shell. App code lives on the app PVC.
-          image: docker.io/library/debian:bookworm-slim
-          imagePullPolicy: IfNotPresent
-          command: ["/app/entrypoint.sh"]
+          # Pin digest in production after first publish; kustomize images: can override.
+          image: ghcr.io/d-kholin/k8up-btl:latest
+          # Prefer digest pin + IfNotPresent in prod; Always keeps :latest fresh.
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
@@ -46,9 +47,7 @@ spec:
             - name: RESTIC_BINARY
               value: /app/restic
             - name: SSL_CERT_FILE
-              value: /app/ca-certificates.crt
-            - name: SSL_CERT_DIR
-              value: /app/ssl-certs
+              value: /etc/ssl/certs/ca-certificates.crt
             - name: K8UP_GLOBAL_SECRET_NAMESPACE
               value: k8up
             - name: K8UP_GLOBAL_SECRET_NAME
@@ -57,6 +56,7 @@ spec:
               value: operator
             # No in-app auth. Pangolin/Newt NetworkPolicy is the gate.
             # Optional identity headers only enrich audit logs if present.
+            # Never set DEV_AUTH_USER in cluster.
           readinessProbe:
             httpGet:
               path: /healthz
@@ -81,18 +81,13 @@ spec:
             runAsNonRoot: true
             runAsUser: 65532
             runAsGroup: 65532
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: app
-              mountPath: /app
-              readOnly: true
             - name: data
               mountPath: /data
       volumes:
-        - name: app
-          persistentVolumeClaim:
-            claimName: k8up-gui-app
         - name: data
           persistentVolumeClaim:
             claimName: k8up-gui-data
