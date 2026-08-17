@@ -27,6 +27,15 @@ Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance 
 
 Full product requirements: [`docs/PRD.md`](docs/PRD.md).
 
+## Adding k8up btl to an existing K8up cluster
+
+Already running K8up and want the GUI on top? Follow
+[`docs/getting-started.md`](docs/getting-started.md) — it covers the
+per-environment manifest edits (storage class, network policy, Argo CD
+namespace), the restic credentials secret, the per-namespace `backup-pod`
+PodConfig that restores depend on, and which features need what (visibility
+and browse work without Argo CD; restores currently require it).
+
 ## Architecture
 
 ```
@@ -123,7 +132,7 @@ kubectl apply -k deploy/k8s
 kubectl -n k8up-btl rollout status deploy/k8up-btl
 ```
 
-Wire the Service behind Pangolin/Newt (ClusterIP `k8up-btl.k8up-btl.svc:80`). Full steps, pin tags/digests, and migration off the old PVC-seed path: [`docs/deploy.md`](docs/deploy.md).
+Wire the Service behind Pangolin/Newt (ClusterIP `k8up-btl.k8up-btl.svc:80`). Full steps, pin tags/digests, and migration off the old PVC-seed path: [`docs/deploy.md`](docs/deploy.md). Adopting on a different cluster/stack: [`docs/getting-started.md`](docs/getting-started.md).
 
 Do **not** GitOps-track transient Restore CRs this app creates.
 
