@@ -6,6 +6,7 @@ import (
         "fmt"
         "strings"
 
+        appsv1 "k8s.io/api/apps/v1"
         corev1 "k8s.io/api/core/v1"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -65,7 +66,71 @@ func (c *Clients) ResolvePVCOwner(ctx context.Context, pvcNS, pvcName string) (*
                         return &WorkloadRef{Kind: "StatefulSet", Namespace: s.Namespace, Name: s.Name}, nil
                 }
         }
+        // volumeClaimTemplate PVCs (<template>-<sts>-<ordinal>) never appear in the
+        // pod template's volumes; match them by naming convention.
+        for i := range stss.Items {
+                s := &stss.Items[i]
+                if stsTemplateOwnsPVC(s, pvcName) {
+                        return &WorkloadRef{Kind: "StatefulSet", Namespace: s.Namespace, Name: s.Name}, nil
+                }
+        }
+        // Last resort: a live pod mounting the PVC, resolved through owner references.
+        if wl, err := c.resolveOwnerViaPods(ctx, pvcNS, pvcName); err == nil && wl != nil {
+                return wl, nil
+        }
         return nil, fmt.Errorf("no Deployment/StatefulSet in %s mounts PVC %s", pvcNS, pvcName)
+}
+
+func stsTemplateOwnsPVC(s *appsv1.StatefulSet, pvcName string) bool {
+        for _, t := range s.Spec.VolumeClaimTemplates {
+                prefix := t.Name + "-" + s.Name + "-"
+                if strings.HasPrefix(pvcName, prefix) && isOrdinal(strings.TrimPrefix(pvcName, prefix)) {
+                        return true
+                }
+        }
+        return false
+}
+
+func isOrdinal(s string) bool {
+        if s == "" {
+                return false
+        }
+        for _, r := range s {
+                if r < '0' || r > '9' {
+                        return false
+                }
+        }
+        return true
+}
+
+func (c *Clients) resolveOwnerViaPods(ctx context.Context, pvcNS, pvcName string) (*WorkloadRef, error) {
+        pods, err := c.Typed.CoreV1().Pods(pvcNS).List(ctx, metav1.ListOptions{})
+        if err != nil {
+                return nil, err
+        }
+        for i := range pods.Items {
+                p := &pods.Items[i]
+                if !podMountsPVC(&p.Spec, pvcName) {
+                        continue
+                }
+                for _, ref := range p.OwnerReferences {
+                        switch ref.Kind {
+                        case "StatefulSet":
+                                return &WorkloadRef{Kind: "StatefulSet", Namespace: pvcNS, Name: ref.Name}, nil
+                        case "ReplicaSet":
+                                rs, err := c.Typed.AppsV1().ReplicaSets(pvcNS).Get(ctx, ref.Name, metav1.GetOptions{})
+                                if err != nil {
+                                        continue
+                                }
+                                for _, rref := range rs.OwnerReferences {
+                                        if rref.Kind == "Deployment" {
+                                                return &WorkloadRef{Kind: "Deployment", Namespace: pvcNS, Name: rref.Name}, nil
+                                        }
+                                }
+                        }
+                }
+        }
+        return nil, nil
 }
 
 func podMountsPVC(spec *corev1.PodSpec, pvcName string) bool {

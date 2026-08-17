@@ -2,6 +2,7 @@ package config
 
 import (
         "os"
+        "path/filepath"
         "strconv"
         "strings"
         "time"
@@ -21,7 +22,10 @@ type Config struct {
         DefaultUser string
         StaticDir   string
         ResticBinary string
-        LogLevel     string
+        // ResticCacheDir persists restic's repo index/metadata cache across
+        // invocations and pod restarts (defaults to a dir next to the audit DB).
+        ResticCacheDir string
+        LogLevel       string
         AuditRetention   time.Duration
         ScaleDownTimeout time.Duration
         RestoreTimeout   time.Duration
@@ -31,7 +35,7 @@ type Config struct {
 }
 
 func Load() Config {
-        return Config{
+        cfg := Config{
                 HTTPAddr:             getenv("HTTP_ADDR", ":8080"),
                 Kubeconfig:           os.Getenv("KUBECONFIG"),
                 ArgoCDNamespace:      getenv("ARGOCD_NAMESPACE", "argocd"),
@@ -50,7 +54,12 @@ func Load() Config {
                 RestoreTimeout:       durationEnv("RESTORE_TIMEOUT", 2*time.Hour),
                 K8upGlobalSecretNS:   getenv("K8UP_GLOBAL_SECRET_NAMESPACE", "k8up"),
                 K8upGlobalSecretName: getenv("K8UP_GLOBAL_SECRET_NAME", "k8up-global"),
+                ResticCacheDir:       os.Getenv("RESTIC_CACHE_DIR"),
         }
+        if cfg.ResticCacheDir == "" {
+                cfg.ResticCacheDir = filepath.Join(filepath.Dir(cfg.AuditDBPath), "restic-cache")
+        }
+        return cfg
 }
 
 func getenv(k, def string) string {

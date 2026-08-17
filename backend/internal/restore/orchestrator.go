@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,9 @@ type Orchestrator struct {
 
 	mu   sync.Mutex
 	jobs map[string]*State
+	// activeID is the restore currently holding the global Argo pause. Only one
+	// restore may run at a time; Start fails fast while it is set.
+	activeID string
 }
 
 func NewOrchestrator(c *k8s.Clients, argoNS string, scaleTO, restoreTO time.Duration, a *audit.Store, log *slog.Logger) *Orchestrator {
@@ -112,13 +116,9 @@ func (o *Orchestrator) List() []State {
 		out = append(out, *s)
 	}
 	// Newest first for Restores page.
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].StartedAt.After(out[i].StartedAt) {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
 	return out
 }
 
@@ -244,6 +244,17 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
 		return nil, fmt.Errorf("snapshotId or snapshotName required")
 	}
 
+	// Claim the single-restore slot atomically; the Argo pre-check above is
+	// advisory only (it cannot prevent two concurrent Starts on its own).
+	o.mu.Lock()
+	if o.activeID != "" {
+		active := o.activeID
+		o.mu.Unlock()
+		return nil, fmt.Errorf("restore %s already in progress; only one restore may run at a time", active)
+	}
+	o.activeID = id
+	o.mu.Unlock()
+
 	o.set(st)
 	go o.run(st)
 	return st, nil
@@ -287,6 +298,9 @@ func (o *Orchestrator) run(st *State) {
 		}
 		o.mu.Lock()
 		o.jobs[st.RestoreID] = st
+		if o.activeID == st.RestoreID {
+			o.activeID = ""
+		}
 		o.mu.Unlock()
 		o.persist(st)
 		// Keep last log snapshot durable at finish.

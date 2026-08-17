@@ -45,7 +45,7 @@ func NewServer(cfg config.Config, clients *k8s.Clients, orch *restore.Orchestrat
 		K8s:     clients,
 		Orch:    orch,
 		Audit:   store,
-		Restic:  &resticcmd.Runner{Binary: cfg.ResticBinary},
+		Restic:  &resticcmd.Runner{Binary: cfg.ResticBinary, CacheDir: cfg.ResticCacheDir},
 		Log:     log,
 		sseSubs: map[chan []byte]struct{}{},
 	}
@@ -89,32 +89,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/stats/storage", s.handleStorageStats)
 	mux.HandleFunc("GET /api/v1/events", s.handleSSE)
 
+	// No CORS middleware on purpose: the SPA is served same-origin by this
+	// backend (Vite proxies /api in dev), and the API is otherwise
+	// unauthenticated — reflecting Origin would let any website drive it.
 	var h http.Handler = mux
 	h = auth.Middleware(s.Cfg)(h)
-	h = s.withCORS(h)
 
 	if s.Cfg.StaticDir != "" {
 		fs := http.FileServer(http.Dir(s.Cfg.StaticDir))
 		h = s.withSPA(h, fs)
 	}
 	return h
-}
-
-func (s *Server) withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-		}
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+s.Cfg.AuthUserHeader+", "+s.Cfg.AuthEmailHeader)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (s *Server) withSPA(api http.Handler, fs http.Handler) http.Handler {
@@ -181,23 +166,35 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	type named struct {
+	kinds := []struct {
 		name string
 		gvr  schema.GroupVersionResource
-	}
-	out := map[string]any{}
-	for _, n := range []named{
+	}{
 		{"backups", k8s.GVRBackup},
 		{"restores", k8s.GVRRestore},
 		{"checks", k8s.GVRCheck},
 		{"prunes", k8s.GVRPrune},
-	} {
-		list, err := s.K8s.ListResource(ctx, n.gvr, "")
-		if err != nil {
-			out[n.name] = map[string]any{"error": err.Error()}
-			continue
-		}
-		out[n.name] = summarizeList(list.Items)
+	}
+	// The four cluster-wide LISTs are independent; run them concurrently so
+	// response latency is the slowest list, not the sum of all four.
+	results := make([]any, len(kinds))
+	var wg sync.WaitGroup
+	for i, n := range kinds {
+		wg.Add(1)
+		go func(i int, gvr schema.GroupVersionResource) {
+			defer wg.Done()
+			list, err := s.K8s.ListResource(ctx, gvr, "")
+			if err != nil {
+				results[i] = map[string]any{"error": err.Error()}
+				return
+			}
+			results[i] = summarizeList(list.Items)
+		}(i, n.gvr)
+	}
+	wg.Wait()
+	out := map[string]any{}
+	for i, n := range kinds {
+		out[n.name] = results[i]
 	}
 	writeJSON(w, http.StatusOK, out)
 }

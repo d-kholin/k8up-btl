@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,14 @@ type statsCache struct {
 var globalStatsCache statsCache
 
 const statsCacheTTL = 10 * time.Minute
+
+// statsConcurrency bounds parallel restic stats invocations per refresh.
+const statsConcurrency = 3
+
+type nsRepo struct {
+	ns, repo string
+	snaps    int
+}
 
 func (s *Server) statsCachePath() string {
 	dir := filepath.Dir(s.Cfg.AuditDBPath)
@@ -308,10 +317,6 @@ func (s *Server) collectStorageStats(ctx context.Context) (*storageStatsResponse
 	if err != nil {
 		return nil, err
 	}
-	type nsRepo struct {
-		ns, repo string
-		snaps    int
-	}
 	byNS := map[string]*nsRepo{}
 	for i := range schedules.Items {
 		item := &schedules.Items[i]
@@ -353,55 +358,43 @@ func (s *Server) collectStorageStats(ctx context.Context) (*storageStatsResponse
 		}
 	}
 
+	repos := make([]*nsRepo, 0, len(byNS))
+	for _, nr := range byNS {
+		repos = append(repos, nr)
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].ns < repos[j].ns })
+
 	out := &storageStatsResponse{
 		CollectedAt: time.Now().UTC(),
-		Repos:       make([]repoStats, 0, len(byNS)),
+		Repos:       make([]repoStats, len(repos)),
 	}
 
-	for _, nr := range byNS {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		rs := repoStats{
-			Namespace:     nr.ns,
-			Repository:    nr.repo,
-			SnapshotCount: nr.snaps,
-		}
-		repoEnv, rerr := s.repoEnvForNamespace(ctx, nr.ns, nr.repo, endpoint, baseEnv)
-		if rerr != nil {
-			rs.Error = rerr.Error()
+	// Repos are independent and restic stats is network-bound against S3/Garage;
+	// a small worker pool cuts total refresh time roughly by the pool size.
+	sem := make(chan struct{}, statsConcurrency)
+	var wg sync.WaitGroup
+	for i, nr := range repos {
+		wg.Add(1)
+		go func(i int, nr *nsRepo) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			out.Repos[i] = s.collectRepoStats(ctx, nr, endpoint, baseEnv)
+		}(i, nr)
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range out.Repos {
+		rs := &out.Repos[i]
+		if rs.Error != "" {
 			out.Partial = true
-			out.Repos = append(out.Repos, rs)
-			continue
-		}
-		// restore-size = logical unique content; raw-data = bytes in repo
-		logical, lerr := s.Restic.Stats(ctx, repoEnv, "", "restore-size")
-		if lerr != nil {
-			rs.Error = lerr.Error()
-			out.Partial = true
-			out.Repos = append(out.Repos, rs)
-			continue
-		}
-		stored, serr := s.Restic.Stats(ctx, repoEnv, "", "raw-data")
-		if serr != nil {
-			rs.Error = serr.Error()
-			out.Partial = true
-			// still keep logical if we have it
-		}
-		rs.LogicalBytes = jsonInt64(logical, "total_size")
-		if serr == nil {
-			rs.StoredBytes = jsonInt64(stored, "total_size")
-		}
-		if rs.LogicalBytes > 0 && rs.StoredBytes > 0 {
-			rs.DedupRatio = 1 - float64(rs.StoredBytes)/float64(rs.LogicalBytes)
-			if rs.DedupRatio < 0 {
-				rs.DedupRatio = 0
-			}
 		}
 		out.LogicalBytes += rs.LogicalBytes
 		out.StoredBytes += rs.StoredBytes
 		out.SnapshotCount += rs.SnapshotCount
-		out.Repos = append(out.Repos, rs)
 	}
 
 	out.SavedBytes = out.LogicalBytes - out.StoredBytes
@@ -415,6 +408,40 @@ func (s *Server) collectStorageStats(ctx context.Context) (*storageStatsResponse
 		}
 	}
 	return out, nil
+}
+
+func (s *Server) collectRepoStats(ctx context.Context, nr *nsRepo, endpoint string, baseEnv []string) repoStats {
+	rs := repoStats{
+		Namespace:     nr.ns,
+		Repository:    nr.repo,
+		SnapshotCount: nr.snaps,
+	}
+	repoEnv, err := s.repoEnvForNamespace(ctx, nr.ns, nr.repo, endpoint, baseEnv)
+	if err != nil {
+		rs.Error = err.Error()
+		return rs
+	}
+	// restore-size = logical unique content; raw-data = bytes in repo
+	logical, lerr := s.Restic.Stats(ctx, repoEnv, "", "restore-size")
+	if lerr != nil {
+		rs.Error = lerr.Error()
+		return rs
+	}
+	rs.LogicalBytes = jsonInt64(logical, "total_size")
+	stored, serr := s.Restic.Stats(ctx, repoEnv, "", "raw-data")
+	if serr != nil {
+		// keep logical numbers, surface the raw-data error
+		rs.Error = serr.Error()
+	} else {
+		rs.StoredBytes = jsonInt64(stored, "total_size")
+	}
+	if rs.LogicalBytes > 0 && rs.StoredBytes > 0 {
+		rs.DedupRatio = 1 - float64(rs.StoredBytes)/float64(rs.LogicalBytes)
+		if rs.DedupRatio < 0 {
+			rs.DedupRatio = 0
+		}
+	}
+	return rs
 }
 
 func (s *Server) globalResticEnv(ctx context.Context) ([]string, error) {

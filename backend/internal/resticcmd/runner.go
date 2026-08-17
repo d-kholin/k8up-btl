@@ -20,11 +20,17 @@ import (
 type Runner struct {
 	Binary string
 
+	// CacheDir, when set, is passed as RESTIC_CACHE_DIR so repo index/metadata
+	// persist across invocations — first `ls`/`stats` per repo pays the S3 index
+	// fetch, subsequent calls hit local disk.
+	CacheDir string
+
 	// ListCacheTTL caches directory listings (snapshots are immutable).
 	// Zero uses defaultListCacheTTL. Negative disables the cache.
 	ListCacheTTL time.Duration
 
-	listCache listCache
+	listCache    listCache
+	cacheDirOnce sync.Once
 }
 
 const defaultListCacheTTL = 5 * time.Minute
@@ -70,6 +76,10 @@ func (r *Runner) run(ctx context.Context, repo RepoEnv, args ...string) *exec.Cm
 		if v := os.Getenv(k); v != "" {
 			base = append(base, k+"="+v)
 		}
+	}
+	if r.CacheDir != "" {
+		r.cacheDirOnce.Do(func() { _ = os.MkdirAll(r.CacheDir, 0o700) })
+		base = append(base, "RESTIC_CACHE_DIR="+r.CacheDir)
 	}
 	cmd.Env = append(base, repo.Env...)
 	return cmd
