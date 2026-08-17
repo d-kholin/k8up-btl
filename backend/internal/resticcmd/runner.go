@@ -30,6 +30,7 @@ type Runner struct {
 	ListCacheTTL time.Duration
 
 	listCache    listCache
+	diffCache    diffCache
 	cacheDirOnce sync.Once
 }
 
@@ -47,6 +48,7 @@ var allowedCommands = map[string]struct{}{
 	"dump":      {},
 	"stats":     {},
 	"snapshots": {},
+	"diff":      {},
 }
 
 func (r *Runner) bin() string {

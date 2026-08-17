@@ -21,6 +21,7 @@ import (
 	"github.com/d-kholin/k8up-gui/internal/auth"
 	"github.com/d-kholin/k8up-gui/internal/config"
 	"github.com/d-kholin/k8up-gui/internal/k8s"
+	"github.com/d-kholin/k8up-gui/internal/notify"
 	"github.com/d-kholin/k8up-gui/internal/resticcmd"
 	"github.com/d-kholin/k8up-gui/internal/restore"
 )
@@ -32,6 +33,8 @@ type Server struct {
 	Audit  *audit.Store
 	Restic *resticcmd.Runner
 	Log    *slog.Logger
+	// Notify is optional; set by main when any channel is configured.
+	Notify *notify.Manager
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
@@ -83,6 +86,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/interrupted", s.handleInterrupted)
 	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/files", s.handleListFiles)
 	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/download", s.handleDownload)
+	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/diff", s.handleSnapshotDiff)
+	mux.HandleFunc("POST /api/v1/notify/test", s.handleNotifyTest)
 	mux.HandleFunc("POST /api/v1/backups", s.handleCreateBackup)
 	mux.HandleFunc("POST /api/v1/checks", s.handleCreateCheck)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
@@ -174,11 +179,47 @@ func (s *Server) handleBackupHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
+	channels := s.Notify.ChannelNames()
+	if channels == nil {
+		channels = []string{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"grafanaDashboardUrl":  s.Cfg.GrafanaDashboardURL,
 		"prometheusConfigured": s.Cfg.PrometheusURL != "",
 		"argocdNamespace":      s.Cfg.ArgoCDNamespace,
+		"notifyChannels":       channels,
 	})
+}
+
+// handleNotifyTest fires a test notification to every configured channel and
+// reports per-channel delivery results.
+func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
+	if !s.Notify.Enabled() {
+		http.Error(w, "no notification channels configured (set NTFY_TOPIC and/or SMTP_HOST+SMTP_FROM+SMTP_TO)", http.StatusServiceUnavailable)
+		return
+	}
+	u, _ := auth.FromContext(r.Context())
+	errs := s.Notify.Send(r.Context(), notify.Event{
+		Title:    "Test notification",
+		Body:     fmt.Sprintf("Test notification from k8up btl, requested by %s.", u.Username),
+		Severity: notify.SeverityInfo,
+		Tags:     []string{"test"},
+	})
+	results := map[string]string{}
+	ok := true
+	for ch, err := range errs {
+		if err != nil {
+			results[ch] = err.Error()
+			ok = false
+		} else {
+			results[ch] = "ok"
+		}
+	}
+	code := http.StatusOK
+	if !ok {
+		code = http.StatusBadGateway
+	}
+	writeJSON(w, code, map[string]any{"ok": ok, "channels": results})
 }
 
 func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {

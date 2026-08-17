@@ -67,6 +67,25 @@ export type FileNode = {
   mtime?: string
 }
 
+export type DiffChangeKind = 'added' | 'removed' | 'modified' | 'metadata'
+
+export type DiffChange = {
+  path: string
+  modifier: string
+  kind: DiffChangeKind
+}
+
+export type SnapshotDiff = {
+  base: { name: string; id: string }
+  target: { name: string; id: string }
+  changedFiles: number
+  added: { files: number; dirs: number; bytes: number }
+  removed: { files: number; dirs: number; bytes: number }
+  changes: DiffChange[]
+  totalChanges: number
+  truncated: boolean
+}
+
 export type StorageStats = {
   collectedAt: string
   logicalBytes: number
@@ -119,7 +138,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => req<User>('/api/v1/me'),
-  meta: () => req<{ grafanaDashboardUrl?: string; prometheusConfigured: boolean; argocdNamespace: string }>('/api/v1/meta'),
+  meta: () =>
+    req<{
+      grafanaDashboardUrl?: string
+      prometheusConfigured: boolean
+      argocdNamespace: string
+      notifyChannels?: string[]
+    }>('/api/v1/meta'),
   schedules: () => req<K8sObject[]>('/api/v1/schedules'),
   snapshots: (namespace?: string) =>
     req<K8sObject[]>(`/api/v1/snapshots${namespace ? `?namespace=${encodeURIComponent(namespace)}` : ''}`),
@@ -152,6 +177,11 @@ export const api = {
     if (opts?.folder) q.set('folder', '1')
     return `/api/v1/snapshots/${ns}/${name}/download?${q.toString()}`
   },
+  diff: (ns: string, name: string, base: string, signal?: AbortSignal) =>
+    req<SnapshotDiff>(
+      `/api/v1/snapshots/${ns}/${name}/diff?base=${encodeURIComponent(base)}`,
+      { signal },
+    ),
   pvcs: () => req<PVCRef[]>('/api/v1/pvcs'),
   backupHistory: (days = 366, kind?: string) =>
     req<{ since: string; events: BackupEvent[] }>(

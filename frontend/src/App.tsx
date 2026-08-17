@@ -10,6 +10,7 @@ import Jobs from './pages/Jobs'
 import Restores from './pages/Restores'
 import Audit from './pages/Audit'
 import Browser from './pages/Browser'
+import SnapshotDiffPage from './pages/SnapshotDiff'
 import { Alert } from './components/ui/alert'
 import { Button } from './components/ui/button'
 
@@ -119,6 +120,14 @@ export default function App() {
               element={
                 <PageShell>
                   <Browser />
+                </PageShell>
+              }
+            />
+            <Route
+              path="/snapshots/:ns/:name/diff"
+              element={
+                <PageShell>
+                  <SnapshotDiffPage />
                 </PageShell>
               }
             />

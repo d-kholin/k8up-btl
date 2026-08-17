@@ -24,8 +24,13 @@ type Recorder struct {
 	// OnEvent fires when a job's recorded status changes (including its first
 	// observation after startup). Used to push live updates over SSE.
 	OnEvent func(audit.BackupEvent)
+	// OnTransition is like OnEvent but suppressed during the first sweep, so a
+	// backend restart never re-fires for jobs that finished long ago. Used for
+	// notifications.
+	OnTransition func(audit.BackupEvent)
 
 	seen map[string]string // "<kind>/<uid>" → last observed status
+	warm bool              // first sweep completed
 }
 
 var watchedKinds = []struct {
@@ -79,8 +84,13 @@ func (r *Recorder) sweep(ctx context.Context) {
 				r.Log.Warn("history sweep: upsert failed", "kind", k.kind, "name", e.Namespace+"/"+e.Name, "err", err)
 				continue
 			}
-			if r.OnEvent != nil && r.seen[seenKey] != e.Status {
-				r.OnEvent(e)
+			if r.seen[seenKey] != e.Status {
+				if r.OnEvent != nil {
+					r.OnEvent(e)
+				}
+				if r.OnTransition != nil && r.warm {
+					r.OnTransition(e)
+				}
 			}
 			r.seen[seenKey] = e.Status
 		}
@@ -96,6 +106,7 @@ func (r *Recorder) sweep(ctx context.Context) {
 			}
 		}
 	}
+	r.warm = true
 }
 
 func eventFromObject(kind string, obj *unstructured.Unstructured) audit.BackupEvent {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,13 +15,37 @@ import (
 	"github.com/d-kholin/k8up-gui/internal/config"
 	"github.com/d-kholin/k8up-gui/internal/history"
 	"github.com/d-kholin/k8up-gui/internal/k8s"
+	"github.com/d-kholin/k8up-gui/internal/notify"
 	"github.com/d-kholin/k8up-gui/internal/restore"
 )
+
+func buildNotifier(cfg config.Config, log *slog.Logger) *notify.Manager {
+	var channels []notify.Channel
+	if cfg.NtfyEnabled() {
+		channels = append(channels, &notify.Ntfy{Server: cfg.NtfyServer, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken})
+	}
+	if cfg.EmailEnabled() {
+		channels = append(channels, &notify.Email{
+			Host: cfg.SMTPHost, Port: cfg.SMTPPort, TLSMode: cfg.SMTPTLS,
+			Username: cfg.SMTPUser, Password: cfg.SMTPPass,
+			From: cfg.SMTPFrom, To: cfg.SMTPTo,
+			SubjectPrefix: "[k8up btl]",
+		})
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	m := notify.NewManager(log, channels...)
+	log.Info("notifications enabled", "channels", m.ChannelNames())
+	return m
+}
 
 func main() {
 	cfg := config.Load()
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
 	slog.SetDefault(log)
+
+	notifier := buildNotifier(cfg, log)
 
 	store, err := audit.Open(cfg.AuditDBPath)
 	if err != nil {
@@ -63,6 +88,9 @@ func main() {
 				}
 				log.Warn("interrupted restore", "restoreId", st.RestoreID, "app", app, "step", st.Step)
 			}
+			if e, ok := notify.InterruptedRestoresEvent(interrupted); ok {
+				notifier.Go(e)
+			}
 		}
 	}
 
@@ -91,6 +119,32 @@ func main() {
 	}()
 
 	srv := api.NewServer(cfg, clients, orch, store, log)
+	srv.Notify = notifier
+
+	// Alert on GUI-orchestrated restores reaching a terminal step. Chained onto
+	// the SSE publisher NewServer installed; dedupe because publish can re-emit
+	// a terminal state (e.g. manual Argo resume updates a finished restore).
+	if notifier.Enabled() {
+		notifiedRestores := map[string]bool{}
+		var notifiedMu sync.Mutex
+		prevUpdate := orch.OnUpdate
+		orch.OnUpdate = func(st restore.State) {
+			if prevUpdate != nil {
+				prevUpdate(st)
+			}
+			e, terminal := notify.RestoreOutcomeEvent(st)
+			if !terminal || (e.Severity == notify.SeveritySuccess && !cfg.NotifyRestoreSuccess) {
+				return
+			}
+			notifiedMu.Lock()
+			seen := notifiedRestores[st.RestoreID]
+			notifiedRestores[st.RestoreID] = true
+			notifiedMu.Unlock()
+			if !seen {
+				notifier.Go(e)
+			}
+		}
+	}
 
 	// Durable backup run history: sweep K8up job CRs into SQLite so outcomes
 	// survive K8up's keepJobs garbage collection; push changes to SSE clients.
@@ -101,6 +155,19 @@ func main() {
 			Log:      log,
 			Interval: cfg.HistoryPollInterval,
 			OnEvent:  srv.BroadcastBackupEvent,
+		}
+		if notifier.Enabled() {
+			rec.OnTransition = func(e audit.BackupEvent) {
+				// GUI-orchestrated Restore CR failures already alert via the
+				// orchestrator hook above with richer context; still alert here
+				// for Restore CRs created outside the GUI.
+				if e.Status == "failed" {
+					if e.Kind == "Restore" && orchestratorOwnsRestore(orch, e) {
+						return
+					}
+					notifier.Go(notify.JobFailureEvent(e))
+				}
+			}
 		}
 		go rec.Run(context.Background())
 	}
@@ -125,6 +192,17 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
+}
+
+// orchestratorOwnsRestore reports whether a failed Restore CR belongs to a
+// GUI-orchestrated restore (which already sends its own richer notification).
+func orchestratorOwnsRestore(orch *restore.Orchestrator, e audit.BackupEvent) bool {
+	for _, st := range orch.List() {
+		if st.RestoreCRName == e.Name && st.PVCNamespace == e.Namespace {
+			return true
+		}
+	}
+	return false
 }
 
 func parseLevel(s string) slog.Level {

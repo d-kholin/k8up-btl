@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ChevronDown, ChevronRight, FolderSearch } from 'lucide-react'
+import { ChevronDown, ChevronRight, FolderSearch, GitCompareArrows } from 'lucide-react'
 import { api, type K8sObject } from '../api'
 import { formatWhen } from '../lib/utils'
 import { snapSpec, snapTime, workloadFromPaths } from '../lib/snapshots'
@@ -163,6 +163,15 @@ export default function Snapshots() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-2">
+                              <Button asChild size="sm" variant="ghost">
+                                <Link
+                                  to={`/snapshots/${s.namespace}/${s.name}/diff`}
+                                  title="Compare with a previous snapshot"
+                                >
+                                  <GitCompareArrows className="h-3.5 w-3.5" />
+                                  Compare
+                                </Link>
+                              </Button>
                               <Button asChild size="sm" variant="ghost">
                                 <Link to={`/snapshots/${s.namespace}/${s.name}/browse`}>
                                   <FolderSearch className="h-3.5 w-3.5" />

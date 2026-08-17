@@ -15,7 +15,9 @@ Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance 
 |------|------------|
 | Visibility | Cluster-wide Schedules, Snapshots, live Backup/Restore/Check/Prune status |
 | Restore | One-click restore with Argo pause/resume, durable mid-restore state |
-| Browse | Per-snapshot file tree + single-file download via `restic` (read-only) |
+| Browse | Per-snapshot file tree + file/folder/snapshot download via `restic` (read-only) |
+| Compare | Diff two snapshots (`restic diff`): added/removed/modified files with byte deltas |
+| Notify | ntfy + email alerts for job failures, restore outcomes, interrupted restores |
 | Actions | Ad-hoc Backup / Check CRs |
 | Audit | 90-day restore + download history |
 | Auth | No in-app auth; Pangolin + Newt NetworkPolicy only |
@@ -89,6 +91,16 @@ npm run dev
 | `AUTH_EMAIL_HEADER` | `X-authentik-email` | Forward-auth email header |
 | `DEV_AUTH_USER` | _(empty)_ | If set, trust this user when headers absent (local only) |
 | `STATIC_DIR` | _(empty)_ | If set, serve SPA from this directory |
+| `NTFY_TOPIC` | _(empty)_ | Enables ntfy notifications (job failures, restore outcomes) |
+| `NTFY_URL` | `https://ntfy.sh` | ntfy server base URL |
+| `NTFY_TOKEN` | _(empty)_ | Optional ntfy access token (Bearer) |
+| `SMTP_HOST` / `SMTP_FROM` / `SMTP_TO` | _(empty)_ | Set all three to enable email notifications |
+| `SMTP_PORT` | `587` | SMTP port |
+| `SMTP_TLS` | `starttls` | `starttls` \| `tls` (implicit, 465) \| `none` |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | _(empty)_ | Optional SMTP auth |
+| `NOTIFY_RESTORE_SUCCESS` | `true` | Also notify on successful GUI restores |
+
+With any channel configured, the backend alerts on: failed Backup/Check/Prune/Restore jobs (detected by the history sweeper, restart-safe), GUI restore completion/failure (including "Argo still paused" attention states), and interrupted restores found at startup. Verify delivery with `curl -X POST .../api/v1/notify/test`.
 
 ## Deploy (cluster)
 
