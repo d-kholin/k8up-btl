@@ -31,10 +31,11 @@ Full product requirements: [`docs/PRD.md`](docs/PRD.md).
 
 Already running K8up and want the GUI on top? Follow
 [`docs/getting-started.md`](docs/getting-started.md) — it covers the
-per-environment manifest edits (storage class, network policy, Argo CD
-namespace), the restic credentials secret, the per-namespace `backup-pod`
-PodConfig that restores depend on, and which features need what (visibility
-and browse work without Argo CD; restores currently require it).
+per-environment manifest edits (network policy, Argo CD namespace, optional
+storage class pin), restic credentials (global secret or per-snapshot secret
+refs), and pod security for restore jobs (inherited from your Schedules).
+Argo CD is integrated but optional: with it, restores pause/resume
+reconciliation automatically; without it, the pause step is skipped.
 
 ## Architecture
 

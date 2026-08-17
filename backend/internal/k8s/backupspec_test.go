@@ -16,6 +16,7 @@ func fakeDynamic(objs ...runtime.Object) *Clients {
 		map[schema.GroupVersionResource]string{
 			GVRSchedule: "ScheduleList",
 			GVRSnapshot: "SnapshotList",
+			GVRRestore:  "RestoreList",
 		}, objs...)
 	return &Clients{Dynamic: dyn}
 }
@@ -76,5 +77,32 @@ func TestResolveBackupSpecNoSchedule(t *testing.T) {
 	spec := c.ResolveBackupSpec(context.Background(), "empty")
 	if len(spec) != 0 {
 		t.Fatalf("expected empty spec without a Schedule, got %v", spec)
+	}
+}
+
+func TestCreateRestoreCRInheritsPodConfig(t *testing.T) {
+	c := fakeDynamic(schedule("ns", map[string]any{
+		"podConfigRef": map[string]any{"name": "backup-pod"},
+	}))
+	backend := map[string]any{"s3": map[string]any{"bucket": "b/ns"}}
+	obj, err := c.CreateRestoreCR(context.Background(), "ns", "gui-restore-x", "snapid", "data-pvc", backend)
+	if err != nil {
+		t.Fatalf("create restore: %v", err)
+	}
+	ref, _, _ := unstructured.NestedMap(obj.Object, "spec", "podConfigRef")
+	if ref["name"] != "backup-pod" {
+		t.Fatalf("podConfigRef not inherited from Schedule: %v", obj.Object["spec"])
+	}
+}
+
+func TestCreateRestoreCRNoScheduleOmitsPodConfig(t *testing.T) {
+	c := fakeDynamic()
+	backend := map[string]any{"s3": map[string]any{"bucket": "b/ns"}}
+	obj, err := c.CreateRestoreCR(context.Background(), "ns", "gui-restore-y", "snapid", "data-pvc", backend)
+	if err != nil {
+		t.Fatalf("create restore: %v", err)
+	}
+	if _, found, _ := unstructured.NestedMap(obj.Object, "spec", "podConfigRef"); found {
+		t.Fatalf("podConfigRef should be omitted without a Schedule: %v", obj.Object["spec"])
 	}
 }

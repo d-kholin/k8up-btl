@@ -5,10 +5,18 @@ import (
         "errors"
         "fmt"
 
+        apierrors "k8s.io/apimachinery/pkg/api/errors"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/apimachinery/pkg/types"
         "k8s.io/client-go/util/retry"
 )
+
+// IsNotFound reports whether err (possibly wrapped) is a Kubernetes NotFound.
+// Callers use it to detect clusters without Argo CD: the restore flows then
+// skip the GitOps pause instead of failing.
+func IsNotFound(err error) bool {
+        return apierrors.IsNotFound(err)
+}
 
 // Default Argo CD application-controller StatefulSet (reconciliation / self-heal).
 const ArgoApplicationControllerSTS = "argocd-application-controller"

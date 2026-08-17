@@ -432,9 +432,12 @@ func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshot
                                 "claimName": pvcName,
                         },
                 },
-                "podConfigRef": map[string]any{
-                        "name": "backup-pod",
-                },
+        }
+        // Inherit pod security from the namespace Schedule (Schedules have no
+        // "restore" section, so this resolves the schedule-wide fields) —
+        // required in PodSecurity-restricted namespaces, harmless elsewhere.
+        for k, v := range c.resolveSchedulePodFields(ctx, namespace, "restore") {
+                spec[k] = v
         }
         if backend != nil {
                 spec["backend"] = backend
@@ -602,22 +605,34 @@ func (c *Clients) ResolveBackupSpec(ctx context.Context, namespace string) map[s
         if be, err := c.ResolveRestoreBackend(ctx, namespace, ""); err == nil && be != nil {
                 spec["backend"] = be
         }
+        for k, v := range c.resolveSchedulePodFields(ctx, namespace, "backup") {
+                spec[k] = v
+        }
+        return spec
+}
+
+// resolveSchedulePodFields returns podConfigRef/podSecurityContext inherited
+// from the namespace's Schedules so one-shot job CRs pass the same Pod
+// Security admission as scheduled jobs: the given job section (spec.<section>.*)
+// wins over schedule-wide (spec.*) fields. Missing fields are omitted.
+func (c *Clients) resolveSchedulePodFields(ctx context.Context, namespace, section string) map[string]any {
+        out := map[string]any{}
         list, err := c.Dynamic.Resource(GVRSchedule).Namespace(namespace).List(ctx, metav1.ListOptions{})
         if err != nil {
-                return spec
+                return out
         }
         for i := range list.Items {
                 obj := list.Items[i].Object
                 for _, field := range []string{"podConfigRef", "podSecurityContext"} {
-                        if _, ok := spec[field]; ok {
+                        if _, ok := out[field]; ok {
                                 continue
                         }
-                        if v, found, _ := unstructured.NestedMap(obj, "spec", "backup", field); found && len(v) > 0 {
-                                spec[field] = v
+                        if v, found, _ := unstructured.NestedMap(obj, "spec", section, field); found && len(v) > 0 {
+                                out[field] = v
                         } else if v, found, _ := unstructured.NestedMap(obj, "spec", field); found && len(v) > 0 {
-                                spec[field] = v
+                                out[field] = v
                         }
                 }
         }
-        return spec
+        return out
 }

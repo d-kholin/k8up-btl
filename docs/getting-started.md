@@ -14,15 +14,17 @@ k8up btl degrades gracefully: each tier works without the ones below it.
 |------|----------|----------|
 | **Visibility** | Schedules, snapshots, job status, calendar, health, notifications | K8up v2 with the Snapshot CRD populated (`kubectl get snapshots.k8up.io -A` shows your backups) |
 | **Browse** | Snapshot file tree, file/folder download, snapshot diff | Restic repository credentials readable by the backend (see step 2) |
-| **Restore** | One-click PVC restore with pause/scale orchestration | **Argo CD** (see below) + a `PodConfig` named `backup-pod` in each namespace you restore into (step 3) |
+| **Restore** | One-click PVC restore with pause/scale orchestration | A K8up `Schedule` in each namespace (backend + pod security are inherited from it — step 3) |
 | **SQL recovery** | Point-in-time recovery of `.sql` dump snapshots | Everything above + `pods/exec` RBAC + `k8up.io/backupcommand` annotations on your DB pods (you likely have these already) |
 
-**Argo CD is currently a hard requirement for restores.** The orchestrator
-pauses reconciliation by scaling the `argocd-application-controller`
-StatefulSet to 0 before touching any workload, and resumes it afterwards. On a
-cluster without Argo CD, restores and recoveries fail at the first step;
-everything in the Visibility and Browse tiers still works. (Flux or plain
-manifests: file an issue — the pause step is the only Argo-specific part.)
+**Argo CD is integrated but not required.** On Argo-managed clusters the
+orchestrator pauses reconciliation (scales the
+`argocd-application-controller` StatefulSet to 0) before touching any
+workload and resumes it afterwards, so self-heal can't scale an app back up
+mid-restore. On clusters without Argo CD the pause is skipped automatically
+(logged in the restore output). **If a different GitOps controller manages
+your replica counts** (Flux, etc.), suspend its reconciliation of the target
+app yourself before restoring — nothing pauses it for you.
 
 ## Step 1 — edit the manifests
 
@@ -38,11 +40,12 @@ Four things are environment-specific:
    ```
 
 2. **Storage class** — `pvc.yaml` requests a 1Gi RWO volume (SQLite audit log
-   only) with `storageClassName: longhorn`. Change it to yours, or delete the
-   line to use the cluster default.
+   only) using the cluster's default StorageClass. Uncomment
+   `storageClassName` to pin a specific one.
 
 3. **Argo CD namespace** — `deployment.yaml` sets `ARGOCD_NAMESPACE: argocd`.
-   Change it if your Argo CD lives elsewhere.
+   Change it if your Argo CD lives elsewhere; on clusters without Argo CD it
+   can stay as-is (the pause step is skipped when the controller is absent).
 
 4. **NetworkPolicy** — `networkpolicy.yaml` is default-deny plus an allow rule
    for a namespace named `newt` (a Pangolin tunnel). Replace the
@@ -80,22 +83,27 @@ operator config uses):
 | `BACKUP_GLOBALSECRETACCESSKEY` | S3 secret key |
 
 If you configured K8up with global S3 credentials, point the env at that
-existing secret and you're done. If you use per-namespace credentials, create
-one secret with the keys above (all repos must share the password/keys, or
-browse only works for the repos these credentials open). S3-compatible
-backends (AWS, MinIO, Garage, Ceph RGW…) are what's tested; the endpoint is
-taken from the snapshot's repository URI.
+existing secret and you're done. If you use **per-namespace credentials**,
+the global secret is optional: when it's missing, the backend falls back to
+the secret refs on each Snapshot CR (`spec.backend.repoPasswordSecretRef` and
+`spec.backend.s3.accessKeyIDSecretRef`/`secretAccessKeySecretRef` — the same
+refs your Schedules use). S3-compatible backends (AWS, MinIO, Garage, Ceph
+RGW…) are what's tested; the endpoint is taken from the snapshot's repository
+URI.
 
-This secret must exist — if the lookup fails, browse/download/recovery
-return a clear error while visibility features keep working.
+If neither source resolves a repository password, browse/download/recovery
+return an error naming both places it looked, while visibility features keep
+working.
 
-## Step 3 — a `PodConfig` named `backup-pod` per namespace
+## Step 3 — pod security for restore jobs (PSA-restricted namespaces)
 
-Restore CRs created by the GUI (and safety backups taken during SQL recovery)
-reference a K8up [`PodConfig`](https://k8up.io/) named **`backup-pod`** in the
-target namespace, so the restic job pods can satisfy Pod Security admission —
-required in any namespace labeled `pod-security.kubernetes.io/enforce:
-restricted`, and harmless elsewhere:
+Restore CRs and safety backups created by the GUI inherit `podConfigRef` and
+`podSecurityContext` **from the namespace's K8up `Schedule`**, so one-shot
+jobs run exactly like your scheduled ones. Nothing extra is needed unless a
+namespace is labeled `pod-security.kubernetes.io/enforce: restricted` — there,
+your Schedule must reference a [`PodConfig`](https://k8up.io/) (any name) that
+makes the restic job pods admissible; if your scheduled backups already pass
+PSA, you already have this:
 
 ```yaml
 apiVersion: k8up.io/v1
@@ -122,10 +130,10 @@ spec:
           type: RuntimeDefault
 ```
 
-Reference it from your Schedule too (`spec.podConfigRef: {name: backup-pod}`)
-so scheduled and GUI-triggered jobs run identically — safety backups inherit
-`backend`, `podConfigRef`, and `podSecurityContext` from the namespace's
-Schedule.
+Then reference it from the Schedule (`spec.podConfigRef: {name: backup-pod}`).
+GUI-created restores and safety backups pick up whatever `podConfigRef` /
+`podSecurityContext` the Schedule declares (job-section fields win over
+schedule-wide ones) — there is no GUI-specific name or config to maintain.
 
 ## Step 4 — apply and verify
 

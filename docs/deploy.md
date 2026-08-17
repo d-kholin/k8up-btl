@@ -4,9 +4,9 @@ Runtime image: **`ghcr.io/d-kholin/k8up-btl`** (built by GitHub Actions from thi
 
 ## Prerequisites
 
-- Cluster with Longhorn (or another RWO StorageClass named `longhorn`, or edit `pvc.yaml`)
-- K8up operator + Secret `k8up/k8up-global` (see `k3s-hl` `docs/backups.md`)
-- Argo CD in namespace `argocd` (for restore orchestration)
+- An RWO StorageClass (cluster default is used; uncomment `storageClassName` in `pvc.yaml` to pin Longhorn or another)
+- K8up operator + Secret `k8up/k8up-global` (see `k3s-hl` `docs/backups.md`; optional if Snapshot CRs carry their own secret refs)
+- Argo CD in namespace `argocd` (optional — restores pause/resume it when present, and skip the pause when absent)
 - Optional: Newt/Pangolin for external access
 
 ## Apply manifests

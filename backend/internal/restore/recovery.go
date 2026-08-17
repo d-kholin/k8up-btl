@@ -289,24 +289,30 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 		o.finalize(st, runErr, &argoPaused)
 	}()
 
-	// 1. Pause ALL Argo reconciliation.
+	// 1. Pause ALL Argo reconciliation. Clusters without Argo CD skip the
+	// pause: NotFound on the controller STS means no GitOps self-heal exists.
 	st.Step = StepPausingArgo
 	o.set(st)
 	o.emitLog(st.RestoreID, "pausing Argo CD application-controller…")
 	b, _ := json.Marshal(st)
 	origCtrl, err := o.Clients.PauseArgoController(runCtx, o.ArgoNS, string(b))
-	if err != nil {
+	switch {
+	case err == nil:
+		if origCtrl <= 0 {
+			origCtrl = 1
+		}
+		st.ArgoControllerReplicas = origCtrl
+		st.ArgoPausedGlobally = true
+		argoPaused = true
+		o.set(st)
+		o.emitLog(st.RestoreID, fmt.Sprintf("Argo controller paused (was %d replica(s))", origCtrl))
+	case k8s.IsNotFound(err):
+		o.Log.Warn("argo application-controller not found; recovering without GitOps pause", "namespace", o.ArgoNS)
+		o.emitLog(st.RestoreID, fmt.Sprintf("··· no Argo CD application-controller in namespace %s — proceeding without a GitOps pause; if another controller manages these workloads' replicas it may fight the recovery", o.ArgoNS))
+	default:
 		runErr = fmt.Errorf("pause argo controller: %w", err)
 		return
 	}
-	if origCtrl <= 0 {
-		origCtrl = 1
-	}
-	st.ArgoControllerReplicas = origCtrl
-	st.ArgoPausedGlobally = true
-	argoPaused = true
-	o.set(st)
-	o.emitLog(st.RestoreID, fmt.Sprintf("Argo controller paused (was %d replica(s))", origCtrl))
 
 	// 2. Quiesce: stop this app's writers only — grouped by instance label or
 	// the git annotation, plus owners of PVCs being restored. The DB workload

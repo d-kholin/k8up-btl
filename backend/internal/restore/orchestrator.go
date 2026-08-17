@@ -410,24 +410,31 @@ func (o *Orchestrator) run(st *State) {
 	}
 
 	// 2. Pause ALL Argo reconciliation (scale application-controller to 0).
+	// Clusters without Argo CD skip the pause: NotFound on the controller STS
+	// means there is no GitOps self-heal to fight the restore.
 	st.Step = StepPausingArgo
 	o.set(st)
 	o.emitLog(st.RestoreID, "pausing Argo CD application-controller…")
 	b, _ := json.Marshal(st)
 	origCtrl, err := o.Clients.PauseArgoController(runCtx, o.ArgoNS, string(b))
-	if err != nil {
+	switch {
+	case err == nil:
+		if origCtrl <= 0 {
+			origCtrl = 1
+		}
+		st.ArgoControllerReplicas = origCtrl
+		st.ArgoPausedGlobally = true
+		argoPaused = true
+		o.set(st)
+		o.Log.Info("argo application-controller paused", "originalReplicas", origCtrl)
+		o.emitLog(st.RestoreID, fmt.Sprintf("Argo controller paused (was %d replica(s))", origCtrl))
+	case k8s.IsNotFound(err):
+		o.Log.Warn("argo application-controller not found; restoring without GitOps pause", "namespace", o.ArgoNS)
+		o.emitLog(st.RestoreID, fmt.Sprintf("··· no Argo CD application-controller in namespace %s — proceeding without a GitOps pause; if another controller manages this workload's replicas it may fight the restore", o.ArgoNS))
+	default:
 		runErr = fmt.Errorf("pause argo controller: %w", err)
 		return
 	}
-	if origCtrl <= 0 {
-		origCtrl = 1
-	}
-	st.ArgoControllerReplicas = origCtrl
-	st.ArgoPausedGlobally = true
-	argoPaused = true
-	o.set(st)
-	o.Log.Info("argo application-controller paused", "originalReplicas", origCtrl)
-	o.emitLog(st.RestoreID, fmt.Sprintf("Argo controller paused (was %d replica(s))", origCtrl))
 
 	// 3. Scale down workload
 	st.Step = StepScalingDown
@@ -708,6 +715,9 @@ func (o *Orchestrator) ManualResumeArgo(ctx context.Context, _appNS, _appName st
 	}
 	raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS)
 	if err != nil {
+		if k8s.IsNotFound(err) {
+			return fmt.Errorf("no Argo CD application-controller in namespace %s — nothing to resume", o.ArgoNS)
+		}
 		return err
 	}
 	orig := int32(1)
@@ -754,6 +764,11 @@ func (o *Orchestrator) ScanInterrupted(ctx context.Context) ([]State, error) {
 	}
 	raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS)
 	if err != nil {
+		// No Argo CD on this cluster — restores never pause anything, so
+		// there is no pause state to have been interrupted.
+		if k8s.IsNotFound(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if raw == "" {
