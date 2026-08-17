@@ -14,18 +14,21 @@ WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN mkdir -p /out \
+  && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 # ---- restic (pinned) ----
 FROM debian:bookworm-slim AS restic
 ARG RESTIC_VERSION=0.18.0
-# Buildx sets TARGETARCH; default for plain `docker build`.
-ARG TARGETARCH=amd64
+# BuildKit injects TARGETARCH per platform. Do not default it here — a default
+# of amd64 made arm64 builds download the wrong restic binary.
+ARG TARGETARCH
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl bzip2 \
   && rm -rf /var/lib/apt/lists/* \
-  && arch="$TARGETARCH" \
+  && arch="${TARGETARCH:?TARGETARCH not set}" \
   && case "$arch" in amd64|arm64) ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
+  && mkdir -p /out \
   && curl -fsSL "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${arch}.bz2" \
     | bunzip2 > /out/restic \
   && chmod 0755 /out/restic \
