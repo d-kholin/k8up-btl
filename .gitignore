@@ -32,3 +32,6 @@ backend/vendor/
 coverage.out
 coverage.html
 app.tgz
+
+# TypeScript incremental build info
+*.tsbuildinfo

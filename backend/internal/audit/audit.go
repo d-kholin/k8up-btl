@@ -79,6 +79,24 @@ CREATE TABLE IF NOT EXISTS restore_jobs (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_restore_jobs_updated ON restore_jobs(updated_at);
+
+-- Durable outcome history of K8up job CRs (Backup/Check/Prune/Restore).
+-- K8up garbage-collects finished CRs per keepJobs; this table is what lets the
+-- GUI answer "what ran last month and did it succeed".
+CREATE TABLE IF NOT EXISTS backup_events (
+  uid TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  name TEXT NOT NULL,
+  schedule TEXT,
+  status TEXT NOT NULL,
+  message TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_backup_events_started ON backup_events(started_at);
+CREATE INDEX IF NOT EXISTS idx_backup_events_kind ON backup_events(kind);
 `)
 	return err
 }

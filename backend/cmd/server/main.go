@@ -12,6 +12,7 @@ import (
 	"github.com/d-kholin/k8up-gui/internal/api"
 	"github.com/d-kholin/k8up-gui/internal/audit"
 	"github.com/d-kholin/k8up-gui/internal/config"
+	"github.com/d-kholin/k8up-gui/internal/history"
 	"github.com/d-kholin/k8up-gui/internal/k8s"
 	"github.com/d-kholin/k8up-gui/internal/restore"
 )
@@ -78,10 +79,32 @@ func main() {
 			if n > 0 {
 				log.Info("pruned audit entries", "count", n)
 			}
+			hn, err := store.PruneBackupEventsOlderThan(context.Background(), cfg.HistoryRetention)
+			if err != nil {
+				log.Error("backup history prune", "err", err)
+				continue
+			}
+			if hn > 0 {
+				log.Info("pruned backup history events", "count", hn)
+			}
 		}
 	}()
 
 	srv := api.NewServer(cfg, clients, orch, store, log)
+
+	// Durable backup run history: sweep K8up job CRs into SQLite so outcomes
+	// survive K8up's keepJobs garbage collection; push changes to SSE clients.
+	if clients != nil {
+		rec := &history.Recorder{
+			Clients:  clients,
+			Store:    store,
+			Log:      log,
+			Interval: cfg.HistoryPollInterval,
+			OnEvent:  srv.BroadcastBackupEvent,
+		}
+		go rec.Run(context.Background())
+	}
+
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Handler(),

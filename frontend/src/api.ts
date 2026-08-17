@@ -25,6 +25,7 @@ export type RestoreState = {
   startedAt?: string
   finishedAt?: string
   originalReplicas?: number
+  restoreCRName?: string
 }
 
 export type AuditEntry = {
@@ -43,6 +44,20 @@ export type AuditEntry = {
   argoApp?: string
   argoPaused?: boolean
 }
+
+export type BackupEvent = {
+  uid: string
+  kind: string
+  namespace: string
+  name: string
+  schedule?: string
+  status: 'running' | 'succeeded' | 'failed' | 'unknown'
+  message?: string
+  startedAt: string
+  finishedAt?: string
+}
+
+export type PVCRef = { namespace: string; name: string }
 
 export type FileNode = {
   name: string
@@ -137,6 +152,11 @@ export const api = {
     if (opts?.folder) q.set('folder', '1')
     return `/api/v1/snapshots/${ns}/${name}/download?${q.toString()}`
   },
+  pvcs: () => req<PVCRef[]>('/api/v1/pvcs'),
+  backupHistory: (days = 366, kind?: string) =>
+    req<{ since: string; events: BackupEvent[] }>(
+      `/api/v1/history/backups?days=${days}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`,
+    ),
   audit: (kind?: string) =>
     req<AuditEntry[]>(`/api/v1/audit${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>

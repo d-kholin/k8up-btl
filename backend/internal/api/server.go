@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -85,6 +86,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/backups", s.handleCreateBackup)
 	mux.HandleFunc("POST /api/v1/checks", s.handleCreateCheck)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/v1/history/backups", s.handleBackupHistory)
+	mux.HandleFunc("GET /api/v1/pvcs", s.handleListPVCs)
 	mux.HandleFunc("GET /api/v1/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/v1/stats/storage", s.handleStorageStats)
 	mux.HandleFunc("GET /api/v1/events", s.handleSSE)
@@ -123,6 +126,51 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	u, _ := auth.FromContext(r.Context())
 	writeJSON(w, http.StatusOK, u)
+}
+
+func (s *Server) handleListPVCs(w http.ResponseWriter, r *http.Request) {
+	if s.K8s == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	refs, err := s.K8s.ListPVCRefs(r.Context())
+	if err != nil {
+		s.writeErr(w, err, http.StatusBadGateway)
+		return
+	}
+	if refs == nil {
+		refs = []k8s.PVCRef{}
+	}
+	writeJSON(w, http.StatusOK, refs)
+}
+
+// BroadcastBackupEvent pushes a recorded job outcome to SSE subscribers so the
+// dashboard activity view updates live.
+func (s *Server) BroadcastBackupEvent(e audit.BackupEvent) {
+	b, _ := json.Marshal(map[string]any{"type": "backup-event", "data": e})
+	s.broadcast(b)
+}
+
+// handleBackupHistory serves the durable K8up job run history recorded by the
+// history sweeper (survives K8up's keepJobs CR cleanup).
+func (s *Server) handleBackupHistory(w http.ResponseWriter, r *http.Request) {
+	days := 366
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 730 {
+			days = n
+		}
+	}
+	kind := r.URL.Query().Get("kind")
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	events, err := s.Audit.ListBackupEvents(r.Context(), since, kind)
+	if err != nil {
+		s.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	if events == nil {
+		events = []audit.BackupEvent{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"since": since, "events": events})
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {

@@ -29,6 +29,16 @@
     --radius: 0.6rem;
     --log-bg: 222 47% 8%;
     --log-fg: 142 70% 80%;
+    /* Backup activity heatmap — green ramp validated (dataviz ordinal checks)
+       against the light card surface; failure colors from the fixed status palette. */
+    --activity-empty: hsl(214 28% 92%);
+    --activity-l1: #79c679;
+    --activity-l2: #46ab46;
+    --activity-l3: #1f8a1f;
+    --activity-l4: #0b5e0b;
+    --activity-mixed: #ec835a;
+    --activity-failed: #d03b3b;
+    --activity-running: hsl(221 83% 40% / 0.35);
   }
 
   .dark {
@@ -53,6 +63,15 @@
     --ring: 213 94% 68%;
     --log-bg: 0 0% 0% / 0.4;
     --log-fg: 142 70% 85%;
+    /* Dark-mode ramp re-stepped for the dark card surface (dim = few, bright = many). */
+    --activity-empty: hsl(217 22% 16%);
+    --activity-l1: #1d5c1d;
+    --activity-l2: #27862a;
+    --activity-l3: #36b23a;
+    --activity-l4: #5cdb60;
+    --activity-mixed: #ec835a;
+    --activity-failed: #d03b3b;
+    --activity-running: hsl(213 94% 68% / 0.4);
   }
 
   * {

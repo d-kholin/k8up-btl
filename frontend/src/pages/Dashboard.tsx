@@ -11,8 +11,10 @@ import {
   PieChart,
   RefreshCw,
 } from 'lucide-react'
-import { api, type AuditEntry, type K8sObject, type RestoreState, type StorageStats } from '../api'
+import { api, type AuditEntry, type BackupEvent, type K8sObject, type PVCRef, type RestoreState, type StorageStats } from '../api'
 import { formatBytes, formatWhen } from '../lib/utils'
+import BackupActivity from '../components/BackupActivity'
+import BackupFreshness from '../components/BackupFreshness'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -40,6 +42,8 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState<Record<string, K8sObject[] | { error: string }>>({})
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [interrupted, setInterrupted] = useState<RestoreState[]>([])
+  const [history, setHistory] = useState<BackupEvent[]>([])
+  const [pvcs, setPvcs] = useState<PVCRef[] | null>(null)
   const [meta, setMeta] = useState<{ grafanaDashboardUrl?: string } | null>(null)
   const [storage, setStorage] = useState<StorageStats | null>(null)
   const [storageLoading, setStorageLoading] = useState(false)
@@ -55,8 +59,10 @@ export default function Dashboard() {
       .finally(() => setStorageLoading(false))
   }
 
-  const load = () => {
-    setLoading(true)
+  // silent=true refreshes data in place without flipping the loading state
+  // (used by the background poll so the page doesn't flicker).
+  const refresh = (silent: boolean) => {
+    if (!silent) setLoading(true)
     Promise.all([
       api.schedules(),
       api.snapshots(),
@@ -64,22 +70,66 @@ export default function Dashboard() {
       api.audit(),
       api.interrupted(),
       api.meta(),
+      api.backupHistory(366),
     ])
-      .then(([sch, sn, j, a, i, m]) => {
+      .then(([sch, sn, j, a, i, m, h]) => {
         setSchedules(sch)
         setSnapshots(sn)
         setJobs(j)
         setAudit(a)
         setInterrupted(i)
         setMeta(m)
+        setHistory(h.events)
       })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false))
+      .catch((e: Error) => {
+        if (!silent) setError(e.message)
+      })
+      .finally(() => {
+        if (!silent) setLoading(false)
+      })
+    // PVC coverage is best-effort: tolerate RBAC/API errors without failing the page.
+    api
+      .pvcs()
+      .then(setPvcs)
+      .catch(() => setPvcs(null))
+  }
+
+  const load = () => {
+    refresh(false)
     loadStorage(false)
   }
 
   useEffect(() => {
     load()
+  }, [])
+
+  // Gentle background refresh so counts and freshness stay current.
+  useEffect(() => {
+    const t = setInterval(() => refresh(true), 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Live updates: the history sweeper broadcasts job outcome changes over SSE.
+  useEffect(() => {
+    const es = new EventSource('/api/v1/events')
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data) as { type?: string; data?: BackupEvent }
+        if (msg.type === 'backup-event' && msg.data?.uid) {
+          const e = msg.data
+          setHistory((prev) => {
+            const i = prev.findIndex((x) => x.uid === e.uid)
+            if (i === -1) return [e, ...prev]
+            const next = [...prev]
+            next[i] = e
+            return next
+          })
+        }
+      } catch {
+        /* ignore malformed events */
+      }
+    }
+    return () => es.close()
   }, [])
 
   // Poll while restic stats are computing in the background (non-blocking API).
@@ -258,6 +308,10 @@ export default function Dashboard() {
         />
       </div>
 
+      <BackupActivity events={history} loading={loading} />
+
+      <BackupFreshness schedules={schedules} snapshots={snapshots} pvcs={pvcs} loading={loading} />
+
       {(storage || storageLoading) && (
         <Card>
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
@@ -390,7 +444,7 @@ export default function Dashboard() {
                       <TableCell className="text-right">{n}</TableCell>
                       <TableCell className="text-right">
                         <Button asChild variant="link" size="sm">
-                          <Link to="/snapshots">Open</Link>
+                          <Link to={`/snapshots?namespace=${encodeURIComponent(ns)}`}>Open</Link>
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -521,12 +575,20 @@ export default function Dashboard() {
                 <TableHead>Name</TableHead>
                 <TableHead>Backup cron</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {schedules.map((s) => (
                 <TableRow key={`${s.namespace}/${s.name}`}>
-                  <TableCell className="font-mono text-xs">{s.namespace}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <Link
+                      to={`/snapshots?namespace=${encodeURIComponent(s.namespace || '')}`}
+                      className="hover:underline"
+                    >
+                      {s.namespace}
+                    </Link>
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{s.name}</TableCell>
                   <TableCell className="font-mono text-xs">
                     {String(
@@ -538,11 +600,16 @@ export default function Dashboard() {
                       {conditionReady(s) ? 'ready' : 'unknown'}
                     </Badge>
                   </TableCell>
+                  <TableCell className="text-right">
+                    <Button asChild variant="link" size="sm">
+                      <Link to={`/jobs?namespace=${encodeURIComponent(s.namespace || '')}`}>Runs</Link>
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
               {schedules.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground">
+                  <TableCell colSpan={5} className="text-muted-foreground">
                     No schedules.
                   </TableCell>
                 </TableRow>

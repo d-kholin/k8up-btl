@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { ChevronDown, ChevronRight, FolderSearch } from 'lucide-react'
 import { api, type K8sObject } from '../api'
 import { formatWhen } from '../lib/utils'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { Card, CardContent, CardHeader } from '../components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -48,10 +48,15 @@ function guessPvc(s: K8sObject): string {
 type NsGroup = { namespace: string; items: K8sObject[] }
 
 export default function Snapshots() {
+  // Deep links from the dashboard land here as /snapshots?namespace=<ns>.
+  const [searchParams] = useSearchParams()
+  const nsParam = searchParams.get('namespace') || ''
   const [items, setItems] = useState<K8sObject[]>([])
   const [error, setError] = useState('')
-  const [filter, setFilter] = useState('')
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [filter, setFilter] = useState(nsParam)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(
+    nsParam ? { [nsParam]: true } : {},
+  )
   const [busy, setBusy] = useState(false)
 
   // Restore dialog

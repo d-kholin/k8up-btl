@@ -539,6 +539,26 @@ func (c *Clients) ListResource(ctx context.Context, gvr schema.GroupVersionResou
         return c.Dynamic.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
 }
 
+// PVCRef is a light PVC reference for coverage reporting.
+type PVCRef struct {
+        Namespace string `json:"namespace"`
+        Name      string `json:"name"`
+}
+
+// ListPVCRefs returns all PVCs cluster-wide (used to spot namespaces with
+// volumes but no backup Schedule).
+func (c *Clients) ListPVCRefs(ctx context.Context) ([]PVCRef, error) {
+        list, err := c.Typed.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
+        if err != nil {
+                return nil, err
+        }
+        out := make([]PVCRef, 0, len(list.Items))
+        for i := range list.Items {
+                out = append(out, PVCRef{Namespace: list.Items[i].Namespace, Name: list.Items[i].Name})
+        }
+        return out, nil
+}
+
 func (c *Clients) GetSecret(ctx context.Context, ns, name string) (*corev1.Secret, error) {
         return c.Typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, type K8sObject } from '../api'
 import { formatWhen } from '../lib/utils'
 import { Alert } from '../components/ui/alert'
@@ -8,9 +9,13 @@ import { Input } from '../components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 
 export default function Jobs() {
+  // Deep links from the dashboard land here as /jobs?namespace=<ns>.
+  const [searchParams] = useSearchParams()
+  const nsParam = searchParams.get('namespace') || ''
   const [jobs, setJobs] = useState<Record<string, K8sObject[] | { error: string }>>({})
   const [error, setError] = useState('')
-  const [ns, setNs] = useState('')
+  const [ns, setNs] = useState(nsParam)
+  const [filter, setFilter] = useState(nsParam)
 
   const load = () => api.jobs().then(setJobs).catch((e: Error) => setError(e.message))
 
@@ -54,11 +59,23 @@ export default function Jobs() {
           <Button variant="secondary" onClick={() => trigger('check')}>
             Run Check…
           </Button>
+          <Input
+            placeholder="Filter by namespace or name…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="max-w-xs sm:ml-auto"
+          />
         </CardHeader>
       </Card>
       {(['backups', 'restores', 'checks', 'prunes'] as const).map((key) => {
         const val = jobs[key]
-        const list = Array.isArray(val) ? val : []
+        const q = filter.trim().toLowerCase()
+        const list = (Array.isArray(val) ? val : []).filter(
+          (j) =>
+            !q ||
+            (j.namespace || '').toLowerCase().includes(q) ||
+            (j.name || '').toLowerCase().includes(q),
+        )
         const err = val && !Array.isArray(val) ? val.error : ''
         return (
           <Card key={key}>

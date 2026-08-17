@@ -29,6 +29,10 @@ type Config struct {
         AuditRetention   time.Duration
         ScaleDownTimeout time.Duration
         RestoreTimeout   time.Duration
+        // HistoryPollInterval is how often K8up job CRs are swept into the
+        // durable backup_events history; HistoryRetention bounds that table.
+        HistoryPollInterval time.Duration
+        HistoryRetention    time.Duration
         // Cluster-wide K8up backend secret (this homelab: k8up/k8up-global).
         K8upGlobalSecretNS   string
         K8upGlobalSecretName string
@@ -50,6 +54,8 @@ func Load() Config {
                 ResticBinary:         getenv("RESTIC_BINARY", "restic"),
                 LogLevel:             getenv("LOG_LEVEL", "info"),
                 AuditRetention:       durationEnv("AUDIT_RETENTION", 90*24*time.Hour),
+                HistoryPollInterval:  durationEnv("HISTORY_POLL_INTERVAL", time.Minute),
+                HistoryRetention:     durationEnv("HISTORY_RETENTION", 400*24*time.Hour),
                 ScaleDownTimeout:     durationEnv("SCALE_DOWN_TIMEOUT", 10*time.Minute),
                 RestoreTimeout:       durationEnv("RESTORE_TIMEOUT", 2*time.Hour),
                 K8upGlobalSecretNS:   getenv("K8UP_GLOBAL_SECRET_NAMESPACE", "k8up"),
