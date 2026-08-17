@@ -48,6 +48,23 @@ func RestoreOutcomeEvent(st restore.State) (Event, bool) {
 			Tags:     []string{"restore", st.PVCNamespace},
 		}, true
 	case restore.StepFailed:
+		if st.Cancelled {
+			var b strings.Builder
+			fmt.Fprintf(&b, "Restore of PVC %s was cancelled by the operator.\n", target)
+			if st.SnapshotID != "" {
+				fmt.Fprintf(&b, "Snapshot: %s\n", shortID(st.SnapshotID))
+			}
+			b.WriteString("The volume may contain a partial restore.\n")
+			if st.ArgoPausedGlobally && (st.ArgoSyncResumed == nil || !*st.ArgoSyncResumed) {
+				b.WriteString("\nATTENTION: Argo CD sync is still PAUSED and needs manual resume.\n")
+			}
+			return Event{
+				Title:    "Restore cancelled: " + target,
+				Body:     b.String(),
+				Severity: SeverityInfo,
+				Tags:     []string{"restore", st.PVCNamespace},
+			}, true
+		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Restore of PVC %s FAILED.\n", target)
 		if st.SnapshotID != "" {

@@ -15,6 +15,7 @@ export type RestoreState = {
   restoreId: string
   step: string
   snapshotId?: string
+  snapshotNamespace?: string
   pvcNamespace?: string
   pvcName?: string
   lastError?: string
@@ -26,7 +27,74 @@ export type RestoreState = {
   finishedAt?: string
   originalReplicas?: number
   restoreCRName?: string
+  cancelRequested?: boolean
+  cancelled?: boolean
+  progressPercent?: number
+  bytesRecovered?: number
 }
+
+export type ClusterStatus = {
+  connected: boolean
+  error?: string
+  checkedAt?: string
+}
+
+export type Meta = {
+  grafanaDashboardUrl?: string
+  prometheusConfigured: boolean
+  argocdNamespace: string
+  notifyChannels?: string[]
+  cluster?: ClusterStatus
+}
+
+export type AuditPage = {
+  entries: AuditEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type AuditSummary = {
+  restoreOk: number
+  restoreFail: number
+  downloadBytes: number
+  latestRestore?: AuditEntry
+}
+
+export type NotifyFieldView = {
+  ntfyServer: string
+  ntfyTopic: string
+  ntfyTokenSet: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpTls: string
+  smtpUser: string
+  smtpPassSet: boolean
+  smtpFrom: string
+  smtpTo: string
+}
+
+export type NotifySettings = {
+  env: NotifyFieldView
+  overrides: NotifyFieldView & { ntfyDisabled: boolean; emailDisabled: boolean }
+  channels: string[]
+}
+
+// Merge-style update: absent field = unchanged, '' / 0 / false = clear override.
+export type NotifySettingsUpdate = Partial<{
+  ntfyServer: string
+  ntfyTopic: string
+  ntfyToken: string
+  ntfyDisabled: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpTls: string
+  smtpUser: string
+  smtpPass: string
+  smtpFrom: string
+  smtpTo: string
+  emailDisabled: boolean
+}>
 
 export type AuditEntry = {
   id: number
@@ -138,13 +206,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => req<User>('/api/v1/me'),
-  meta: () =>
-    req<{
-      grafanaDashboardUrl?: string
-      prometheusConfigured: boolean
-      argocdNamespace: string
-      notifyChannels?: string[]
-    }>('/api/v1/meta'),
+  meta: () => req<Meta>('/api/v1/meta'),
   schedules: () => req<K8sObject[]>('/api/v1/schedules'),
   snapshots: (namespace?: string) =>
     req<K8sObject[]>(`/api/v1/snapshots${namespace ? `?namespace=${encodeURIComponent(namespace)}` : ''}`),
@@ -163,6 +225,8 @@ export const api = {
     pvcName: string
   }) =>
     req<RestoreState>('/api/v1/restores', { method: 'POST', body: JSON.stringify(body) }),
+  cancelRestore: (id: string) =>
+    req<{ status: string }>(`/api/v1/restores/${id}/cancel`, { method: 'POST' }),
   interrupted: () => req<RestoreState[]>('/api/v1/interrupted'),
   resumeArgo: (ns: string, name: string) =>
     req<{ status: string }>(`/api/v1/argo/${ns}/${name}/resume`, { method: 'POST' }),
@@ -187,8 +251,46 @@ export const api = {
     req<{ since: string; events: BackupEvent[] }>(
       `/api/v1/history/backups?days=${days}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`,
     ),
-  audit: (kind?: string) =>
-    req<AuditEntry[]>(`/api/v1/audit${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
+  audit: (opts?: {
+    kind?: string
+    actor?: string
+    status?: string
+    since?: string
+    until?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const q = new URLSearchParams()
+    if (opts?.kind) q.set('kind', opts.kind)
+    if (opts?.actor) q.set('actor', opts.actor)
+    if (opts?.status) q.set('status', opts.status)
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    if (opts?.limit) q.set('limit', String(opts.limit))
+    if (opts?.offset) q.set('offset', String(opts.offset))
+    const qs = q.toString()
+    return req<AuditPage>(`/api/v1/audit${qs ? `?${qs}` : ''}`)
+  },
+  auditSummary: () => req<AuditSummary>('/api/v1/audit/summary'),
+  auditExportUrl: (opts?: { kind?: string; actor?: string; since?: string; until?: string }) => {
+    const q = new URLSearchParams()
+    if (opts?.kind) q.set('kind', opts.kind)
+    if (opts?.actor) q.set('actor', opts.actor)
+    if (opts?.since) q.set('since', opts.since)
+    if (opts?.until) q.set('until', opts.until)
+    const qs = q.toString()
+    return `/api/v1/audit/export.csv${qs ? `?${qs}` : ''}`
+  },
+  notifySettings: () => req<NotifySettings>('/api/v1/settings/notifications'),
+  updateNotifySettings: (body: NotifySettingsUpdate) =>
+    req<NotifySettings>('/api/v1/settings/notifications', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  notifyTest: () =>
+    req<{ ok: boolean; channels: Record<string, string> }>('/api/v1/notify/test', {
+      method: 'POST',
+    }),
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>
     req<K8sObject>('/api/v1/backups', { method: 'POST', body: JSON.stringify({ namespace, spec }) }),
   createCheck: (namespace: string, spec: Record<string, unknown> = {}) =>

@@ -19,33 +19,10 @@ import (
 	"github.com/d-kholin/k8up-gui/internal/restore"
 )
 
-func buildNotifier(cfg config.Config, log *slog.Logger) *notify.Manager {
-	var channels []notify.Channel
-	if cfg.NtfyEnabled() {
-		channels = append(channels, &notify.Ntfy{Server: cfg.NtfyServer, Topic: cfg.NtfyTopic, Token: cfg.NtfyToken})
-	}
-	if cfg.EmailEnabled() {
-		channels = append(channels, &notify.Email{
-			Host: cfg.SMTPHost, Port: cfg.SMTPPort, TLSMode: cfg.SMTPTLS,
-			Username: cfg.SMTPUser, Password: cfg.SMTPPass,
-			From: cfg.SMTPFrom, To: cfg.SMTPTo,
-			SubjectPrefix: "[k8up btl]",
-		})
-	}
-	if len(channels) == 0 {
-		return nil
-	}
-	m := notify.NewManager(log, channels...)
-	log.Info("notifications enabled", "channels", m.ChannelNames())
-	return m
-}
-
 func main() {
 	cfg := config.Load()
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
 	slog.SetDefault(log)
-
-	notifier := buildNotifier(cfg, log)
 
 	store, err := audit.Open(cfg.AuditDBPath)
 	if err != nil {
@@ -53,6 +30,18 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// Notifications: env (git) config is the baseline; UI overrides persisted
+	// in SQLite win field-by-field. The manager always exists so the Settings
+	// page can enable channels at runtime.
+	overrides, err := api.LoadNotifyOverrides(context.Background(), store)
+	if err != nil {
+		log.Warn("notify overrides unreadable; using env config only", "err", err)
+	}
+	notifier := notify.NewManager(log, notify.Build(cfg.WithNotifyOverrides(overrides))...)
+	if notifier.Enabled() {
+		log.Info("notifications enabled", "channels", notifier.ChannelNames())
+	}
 
 	var clients *k8s.Clients
 	clients, err = k8s.New(cfg.Kubeconfig)
@@ -120,11 +109,14 @@ func main() {
 
 	srv := api.NewServer(cfg, clients, orch, store, log)
 	srv.Notify = notifier
+	srv.StartClusterMonitor(context.Background())
 
 	// Alert on GUI-orchestrated restores reaching a terminal step. Chained onto
 	// the SSE publisher NewServer installed; dedupe because publish can re-emit
 	// a terminal state (e.g. manual Argo resume updates a finished restore).
-	if notifier.Enabled() {
+	// Installed unconditionally — notifier.Go no-ops while no channel is
+	// configured, and the Settings page can enable channels at runtime.
+	{
 		notifiedRestores := map[string]bool{}
 		var notifiedMu sync.Mutex
 		prevUpdate := orch.OnUpdate
@@ -156,17 +148,15 @@ func main() {
 			Interval: cfg.HistoryPollInterval,
 			OnEvent:  srv.BroadcastBackupEvent,
 		}
-		if notifier.Enabled() {
-			rec.OnTransition = func(e audit.BackupEvent) {
-				// GUI-orchestrated Restore CR failures already alert via the
-				// orchestrator hook above with richer context; still alert here
-				// for Restore CRs created outside the GUI.
-				if e.Status == "failed" {
-					if e.Kind == "Restore" && orchestratorOwnsRestore(orch, e) {
-						return
-					}
-					notifier.Go(notify.JobFailureEvent(e))
+		rec.OnTransition = func(e audit.BackupEvent) {
+			// GUI-orchestrated Restore CR failures already alert via the
+			// orchestrator hook above with richer context; still alert here
+			// for Restore CRs created outside the GUI.
+			if e.Status == "failed" {
+				if e.Kind == "Restore" && orchestratorOwnsRestore(orch, e) {
+					return
 				}
+				notifier.Go(notify.JobFailureEvent(e))
 			}
 		}
 		go rec.Run(context.Background())

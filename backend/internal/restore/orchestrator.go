@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +44,7 @@ type State struct {
 	Step                   Step       `json:"step"`
 	SnapshotID             string     `json:"snapshotId"`
 	SnapshotCR             string     `json:"snapshotCR,omitempty"`
+	SnapshotNamespace      string     `json:"snapshotNamespace,omitempty"`
 	PVCNamespace           string     `json:"pvcNamespace"`
 	PVCName                string     `json:"pvcName"`
 	RestoreCRName          string     `json:"restoreCRName,omitempty"`
@@ -52,6 +55,12 @@ type State struct {
 	// ArgoSyncResumed: controller scaled back up (global pause cleared).
 	ArgoSyncResumed *bool `json:"argoSyncResumed,omitempty"`
 	BytesRecovered  int64 `json:"bytesRecovered,omitempty"`
+	// CancelRequested is set by Cancel; Cancelled marks the terminal state as
+	// operator-aborted rather than failed on its own.
+	CancelRequested bool `json:"cancelRequested,omitempty"`
+	Cancelled       bool `json:"cancelled,omitempty"`
+	// ProgressPercent is best-effort, parsed from restic job log lines.
+	ProgressPercent *float64 `json:"progressPercent,omitempty"`
 }
 
 type Request struct {
@@ -73,9 +82,14 @@ type Orchestrator struct {
 	Logs             *LogHub
 	OnUpdate         func(State)
 	OnLog            func(restoreID, line string)
+	// SnapshotSize resolves the snapshot's restore-size in bytes (wired by the
+	// API server, which owns restic credential resolution). Best-effort.
+	SnapshotSize func(ctx context.Context, snapNS, snapName, snapID string) (int64, error)
 
 	mu   sync.Mutex
 	jobs map[string]*State
+	// cancels holds the per-run cancel funcs for in-flight restores.
+	cancels map[string]context.CancelFunc
 	// activeID is the restore currently holding the global Argo pause. Only one
 	// restore may run at a time; Start fails fast while it is set.
 	activeID string
@@ -94,6 +108,7 @@ func NewOrchestrator(c *k8s.Clients, argoNS string, scaleTO, restoreTO time.Dura
 		Log:              log,
 		Logs:             NewLogHub(),
 		jobs:             map[string]*State{},
+		cancels:          map[string]context.CancelFunc{},
 	}
 }
 
@@ -207,6 +222,13 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
 	if req.PVCNamespace == "" || req.PVCName == "" {
 		return nil, fmt.Errorf("pvcNamespace and pvcName are required")
 	}
+	if req.SnapshotNamespace == "" || req.SnapshotName == "" {
+		return nil, fmt.Errorf("snapshotNamespace and snapshotName are required")
+	}
+	// A snapshot may only be restored into the namespace it was taken from.
+	if req.PVCNamespace != req.SnapshotNamespace {
+		return nil, fmt.Errorf("restore target namespace %q does not match snapshot namespace %q; snapshots may only be restored to their source PVC", req.PVCNamespace, req.SnapshotNamespace)
+	}
 	// Refuse if Argo is already paused by a prior restore.
 	if raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS); err == nil {
 		if raw != "" || reps == 0 {
@@ -215,20 +237,21 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
 	}
 	id := uuid.NewString()
 	st := &State{
-		RestoreID:    id,
-		Step:         StepQueued,
-		SnapshotID:   req.SnapshotID,
-		SnapshotCR:   req.SnapshotName,
-		PVCNamespace: req.PVCNamespace,
-		PVCName:      req.PVCName,
-		StartedAt:    time.Now().UTC(),
-		Actor:        req.Actor,
+		RestoreID:         id,
+		Step:              StepQueued,
+		SnapshotID:        req.SnapshotID,
+		SnapshotCR:        req.SnapshotName,
+		SnapshotNamespace: req.SnapshotNamespace,
+		PVCNamespace:      req.PVCNamespace,
+		PVCName:           req.PVCName,
+		StartedAt:         time.Now().UTC(),
+		Actor:             req.Actor,
 	}
-	if st.SnapshotID == "" && req.SnapshotName != "" {
-		snap, err := o.Clients.GetSnapshot(ctx, req.SnapshotNamespace, req.SnapshotName)
-		if err != nil {
-			return nil, fmt.Errorf("get snapshot: %w", err)
-		}
+	snap, err := o.Clients.GetSnapshot(ctx, req.SnapshotNamespace, req.SnapshotName)
+	if err != nil {
+		return nil, fmt.Errorf("get snapshot: %w", err)
+	}
+	if st.SnapshotID == "" {
 		if id, ok, _ := unstructuredString(snap.Object, "spec", "id"); ok {
 			st.SnapshotID = id
 		} else if id, ok, _ := unstructuredString(snap.Object, "status", "id"); ok {
@@ -240,8 +263,14 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
 			st.SnapshotID = req.SnapshotName
 		}
 	}
-	if st.SnapshotID == "" {
-		return nil, fmt.Errorf("snapshotId or snapshotName required")
+	// The target PVC must be one the snapshot actually backed up (derived from
+	// spec.paths). This blocks restoring snapshot A onto PVC B by retyping.
+	candidates := SourcePVCCandidates(snapshotPaths(snap.Object))
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("cannot determine source PVC from snapshot %s/%s (no usable spec.paths); refusing restore to an unverified target", req.SnapshotNamespace, req.SnapshotName)
+	}
+	if !containsString(candidates, req.PVCName) {
+		return nil, fmt.Errorf("PVC %q is not a source of snapshot %s/%s (backed up: %s); snapshots may only be restored to the PVC they were taken from", req.PVCName, req.SnapshotNamespace, req.SnapshotName, strings.Join(candidates, ", "))
 	}
 
 	// Claim the single-restore slot atomically; the Argo pre-check above is
@@ -261,11 +290,52 @@ func (o *Orchestrator) Start(ctx context.Context, req Request) (*State, error) {
 }
 
 func (o *Orchestrator) run(st *State) {
+	// ctx is for cleanup and must survive cancellation; runCtx drives the
+	// forward steps and is what Cancel aborts.
 	ctx := context.Background()
+	runCtx, cancelRun := context.WithCancel(ctx)
+	o.mu.Lock()
+	o.cancels[st.RestoreID] = cancelRun
+	o.mu.Unlock()
+
 	var runErr error
 	argoPaused := false
+	scaledDown := false
 
 	defer func() {
+		cancelRun()
+		o.mu.Lock()
+		delete(o.cancels, st.RestoreID)
+		cancelled := st.CancelRequested
+		o.mu.Unlock()
+
+		// Some client-go paths don't wrap context.Canceled; a requested cancel
+		// with any error is treated as the cancel taking effect.
+		if cancelled && runErr != nil {
+			st.Cancelled = true
+			st.LastError = "restore cancelled by operator"
+			// Stop the in-cluster restic job: deleting the Restore CR cascades to
+			// its Job via owner references.
+			if st.RestoreCRName != "" {
+				if err := o.Clients.DeleteRestore(ctx, st.PVCNamespace, st.RestoreCRName); err != nil {
+					o.Log.Warn("delete restore CR after cancel", "err", err)
+					o.emitLog(st.RestoreID, fmt.Sprintf("··· could not delete Restore CR %s: %v", st.RestoreCRName, err))
+				} else {
+					o.emitLog(st.RestoreID, fmt.Sprintf("··· deleted Restore CR %s/%s", st.PVCNamespace, st.RestoreCRName))
+				}
+			}
+			// Bring the workload back; the PVC may hold a partial restore — the
+			// operator chose to abort and the log says so.
+			if scaledDown && st.Workload != nil {
+				if err := o.Clients.Scale(ctx, st.Workload, st.OriginalReplicas); err != nil {
+					o.Log.Error("scale up after cancel", "err", err)
+					st.LastError = joinErr(st.LastError, fmt.Errorf("scale up after cancel: %w", err))
+				} else {
+					o.emitLog(st.RestoreID, fmt.Sprintf("··· scaled %s %s/%s back to %d replica(s) — WARNING: volume may contain a partial restore", st.Workload.Kind, st.Workload.Namespace, st.Workload.Name, st.OriginalReplicas))
+				}
+			}
+		}
+
 		// CRITICAL: always resume Argo controller if we paused it.
 		if argoPaused {
 			st.Step = StepResumingArgo
@@ -342,13 +412,13 @@ func (o *Orchestrator) run(st *State) {
 	}()
 
 	// 1. Resolve ownership
-	wl, err := o.Clients.ResolvePVCOwner(ctx, st.PVCNamespace, st.PVCName)
+	wl, err := o.Clients.ResolvePVCOwner(runCtx, st.PVCNamespace, st.PVCName)
 	if err != nil {
 		runErr = err
 		return
 	}
 	st.Workload = wl
-	replicas, err := o.Clients.GetReplicas(ctx, wl)
+	replicas, err := o.Clients.GetReplicas(runCtx, wl)
 	if err != nil {
 		runErr = err
 		return
@@ -356,7 +426,7 @@ func (o *Orchestrator) run(st *State) {
 	st.OriginalReplicas = replicas
 
 	// Optional: record owning Application name for UI (not used for pause).
-	if argo, _, err := o.Clients.ResolveArgoApp(ctx, wl, o.ArgoNS); err == nil && argo != nil {
+	if argo, _, err := o.Clients.ResolveArgoApp(runCtx, wl, o.ArgoNS); err == nil && argo != nil {
 		st.Application = argo
 	}
 
@@ -365,7 +435,7 @@ func (o *Orchestrator) run(st *State) {
 	o.set(st)
 	o.emitLog(st.RestoreID, "pausing Argo CD application-controller…")
 	b, _ := json.Marshal(st)
-	origCtrl, err := o.Clients.PauseArgoController(ctx, o.ArgoNS, string(b))
+	origCtrl, err := o.Clients.PauseArgoController(runCtx, o.ArgoNS, string(b))
 	if err != nil {
 		runErr = fmt.Errorf("pause argo controller: %w", err)
 		return
@@ -384,12 +454,13 @@ func (o *Orchestrator) run(st *State) {
 	st.Step = StepScalingDown
 	o.set(st)
 	o.emitLog(st.RestoreID, fmt.Sprintf("scaling down %s %s/%s → 0", wl.Kind, wl.Namespace, wl.Name))
-	scaleCtx, cancel := context.WithTimeout(ctx, o.ScaleDownTimeout)
+	scaleCtx, cancel := context.WithTimeout(runCtx, o.ScaleDownTimeout)
 	defer cancel()
 	if err := o.Clients.Scale(scaleCtx, wl, 0); err != nil {
 		runErr = fmt.Errorf("scale down: %w", err)
 		return
 	}
+	scaledDown = true
 	if err := o.Clients.WaitPodsGone(scaleCtx, wl); err != nil {
 		runErr = fmt.Errorf("wait pods gone: %w", err)
 		return
@@ -401,13 +472,13 @@ func (o *Orchestrator) run(st *State) {
 	crName := fmt.Sprintf("gui-restore-%s", st.RestoreID[:8])
 	st.RestoreCRName = crName
 	o.set(st)
-	if _, err := o.Clients.CreateRestoreCR(ctx, st.PVCNamespace, crName, st.SnapshotID, st.PVCName, nil); err != nil {
+	if _, err := o.Clients.CreateRestoreCR(runCtx, st.PVCNamespace, crName, st.SnapshotID, st.PVCName, nil); err != nil {
 		runErr = fmt.Errorf("create restore cr: %w", err)
 		return
 	}
 	o.emitLog(st.RestoreID, fmt.Sprintf("created Restore CR %s/%s — following job logs…", st.PVCNamespace, crName))
 
-	restoreCtx, cancelR := context.WithTimeout(ctx, o.RestoreTimeout)
+	restoreCtx, cancelR := context.WithTimeout(runCtx, o.RestoreTimeout)
 	defer cancelR()
 	// Stream job logs in parallel with status wait.
 	go o.followRestoreLogs(restoreCtx, st.RestoreID, st.PVCNamespace, crName)
@@ -416,6 +487,17 @@ func (o *Orchestrator) run(st *State) {
 		return
 	}
 	o.emitLog(st.RestoreID, "··· restore job finished successfully")
+
+	// Best-effort bytes recovered = snapshot restore-size.
+	if o.SnapshotSize != nil && st.SnapshotCR != "" {
+		sizeCtx, cancelS := context.WithTimeout(ctx, 60*time.Second)
+		if n, err := o.SnapshotSize(sizeCtx, st.SnapshotNamespace, st.SnapshotCR, st.SnapshotID); err == nil && n > 0 {
+			st.BytesRecovered = n
+		} else if err != nil {
+			o.Log.Warn("resolve snapshot restore-size", "err", err)
+		}
+		cancelS()
+	}
 
 	// 5. Scale up workload
 	st.Step = StepScalingUp
@@ -446,6 +528,7 @@ func (o *Orchestrator) followRestoreLogs(ctx context.Context, restoreID, ns, crN
 	}
 	err := o.Clients.FollowRestoreJobLogs(ctx, ns, crName, func(line string) {
 		o.emitLog(restoreID, line)
+		o.noteProgress(restoreID, line)
 	})
 	if err != nil && ctx.Err() == nil {
 		o.emitLog(restoreID, fmt.Sprintf("··· log follow ended: %v", err))
@@ -672,4 +755,146 @@ func joinErr(prev string, err error) string {
 		return err.Error()
 	}
 	return prev + "; " + err.Error()
+}
+
+// SourcePVCCandidates derives the PVC names a snapshot was taken from out of
+// its spec.paths (K8up mounts each PVC at /data/<pvcName> in the backup pod).
+// File-like entries (e.g. application-level .sql dumps) are skipped — those
+// are not PVC backups and cannot be restored onto a volume.
+func SourcePVCCandidates(paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		segs := strings.Split(strings.Trim(p, "/"), "/")
+		if len(segs) == 0 {
+			continue
+		}
+		base := segs[len(segs)-1]
+		if base == "" || strings.HasSuffix(base, ".sql") {
+			continue
+		}
+		if !containsString(out, base) {
+			out = append(out, base)
+		}
+	}
+	return out
+}
+
+func snapshotPaths(obj map[string]any) []string {
+	raw, ok, _ := nestedAny(obj, "spec", "paths")
+	if !ok {
+		return nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, v := range list {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func nestedAny(obj map[string]any, fields ...string) (any, bool, error) {
+	var cur any = obj
+	for _, f := range fields {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		cur, ok = m[f]
+		if !ok {
+			return nil, false, nil
+		}
+	}
+	return cur, true, nil
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Cancel aborts an in-flight restore. The run loop's context is cancelled; its
+// cleanup path deletes the Restore CR, scales the workload back up, and resumes
+// the Argo controller (the same defer that runs on any failure).
+func (o *Orchestrator) Cancel(id, actor string) error {
+	o.mu.Lock()
+	st, ok := o.jobs[id]
+	cancel := o.cancels[id]
+	if !ok {
+		o.mu.Unlock()
+		return fmt.Errorf("restore %s not found", id)
+	}
+	if st.Step == StepDone || st.Step == StepFailed {
+		o.mu.Unlock()
+		return fmt.Errorf("restore %s already finished", id)
+	}
+	if cancel == nil {
+		o.mu.Unlock()
+		return fmt.Errorf("restore %s is not cancellable (no active run)", id)
+	}
+	if st.CancelRequested {
+		o.mu.Unlock()
+		return nil
+	}
+	st.CancelRequested = true
+	cp := *st
+	o.mu.Unlock()
+	o.persist(&cp)
+	o.publish(&cp)
+	o.emitLog(id, fmt.Sprintf("··· cancel requested by %s — aborting restore", actor))
+	cancel()
+	if o.Audit != nil {
+		_, _ = o.Audit.Insert(context.Background(), audit.Entry{
+			Kind:      "restore",
+			Actor:     actor,
+			Namespace: cp.PVCNamespace,
+			PVC:       cp.PVCName,
+			Snapshot:  cp.SnapshotID,
+			RestoreID: id,
+			Status:    "cancel_requested",
+		})
+	}
+	return nil
+}
+
+var progressRe = regexp.MustCompile(`(\d{1,3}(?:\.\d+)?)\s*%`)
+
+// noteProgress parses best-effort completion percentages out of restic job log
+// lines and publishes them (throttled to whole-percent changes).
+func (o *Orchestrator) noteProgress(restoreID, line string) {
+	m := progressRe.FindStringSubmatch(line)
+	if m == nil {
+		return
+	}
+	pct, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || pct < 0 || pct > 100 {
+		return
+	}
+	o.mu.Lock()
+	st, ok := o.jobs[restoreID]
+	if !ok || st.Step != StepRestoring {
+		o.mu.Unlock()
+		return
+	}
+	prev := -1.0
+	if st.ProgressPercent != nil {
+		prev = *st.ProgressPercent
+	}
+	// Progress can only move forward; skip sub-percent noise.
+	if pct < prev || (pct-prev) < 1 {
+		o.mu.Unlock()
+		return
+	}
+	st.ProgressPercent = &pct
+	cp := *st
+	o.mu.Unlock()
+	o.publish(&cp)
 }

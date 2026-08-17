@@ -28,6 +28,10 @@ rules:
   - apiGroups: ["k8up.io"]
     resources: ["restores", "backups", "checks"]
     verbs: ["create"]
+  # Cancelling an in-flight GUI restore deletes its Restore CR (cascades to the Job).
+  - apiGroups: ["k8up.io"]
+    resources: ["restores"]
+    verbs: ["delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch", "patch", "update"]

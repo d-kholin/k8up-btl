@@ -1,7 +1,17 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { useEffect, useState, type ReactNode } from 'react'
-import { DatabaseBackup, HardDrive, History, Layers3, Moon, ScrollText, Sun } from 'lucide-react'
-import { api, type User } from './api'
+import {
+  DatabaseBackup,
+  HardDrive,
+  History,
+  Layers3,
+  Moon,
+  ScrollText,
+  Settings as SettingsIcon,
+  Sun,
+  WifiOff,
+} from 'lucide-react'
+import { api, type ClusterStatus, type User } from './api'
 import { cn } from './lib/utils'
 import { useTheme } from './theme'
 import Dashboard from './pages/Dashboard'
@@ -11,6 +21,7 @@ import Restores from './pages/Restores'
 import Audit from './pages/Audit'
 import Browser from './pages/Browser'
 import SnapshotDiffPage from './pages/SnapshotDiff'
+import Settings from './pages/Settings'
 import { Alert } from './components/ui/alert'
 import { Button } from './components/ui/button'
 
@@ -20,6 +31,7 @@ const nav = [
   { to: '/jobs', label: 'Jobs', icon: DatabaseBackup },
   { to: '/restores', label: 'Restores', icon: History },
   { to: '/audit', label: 'Audit', icon: ScrollText },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ]
 
 /** Scrollable pages vs lock-to-viewport (Restores log console). */
@@ -45,10 +57,24 @@ function PageShell({
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [err, setErr] = useState('')
+  const [cluster, setCluster] = useState<ClusterStatus | null>(null)
   const { theme, toggle } = useTheme()
 
   useEffect(() => {
     api.me().then(setUser).catch((e: Error) => setErr(e.message))
+  }, [])
+
+  // Surface degraded mode: without this, a dead cluster connection renders as
+  // "no snapshots" everywhere.
+  useEffect(() => {
+    const check = () =>
+      api
+        .meta()
+        .then((m) => setCluster(m.cluster ?? null))
+        .catch(() => setCluster({ connected: false, error: 'backend unreachable' }))
+    check()
+    const t = setInterval(check, 30000)
+    return () => clearInterval(t)
   }, [])
 
   return (
@@ -93,6 +119,19 @@ export default function App() {
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-6 md:p-8">
         <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col">
+          {cluster && !cluster.connected && (
+            <div className="mb-4 shrink-0">
+              <Alert variant="danger">
+                <span className="flex items-center gap-2">
+                  <WifiOff className="h-4 w-4 shrink-0" />
+                  <span>
+                    Kubernetes API unreachable — data shown may be empty or stale.
+                    {cluster.error ? ` (${cluster.error})` : ''}
+                  </span>
+                </span>
+              </Alert>
+            </div>
+          )}
           {err && (
             <div className="mb-4 shrink-0">
               <Alert variant="danger">{err}</Alert>
@@ -152,6 +191,14 @@ export default function App() {
               element={
                 <PageShell>
                   <Audit />
+                </PageShell>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <PageShell>
+                  <Settings />
                 </PageShell>
               }
             />

@@ -36,9 +36,12 @@ type Channel interface {
 
 const sendTimeout = 15 * time.Second
 
-// Manager fans events out to all configured channels.
+// Manager fans events out to all configured channels. The channel set can be
+// swapped at runtime (UI settings overrides) via SetChannels.
 type Manager struct {
-	Log      *slog.Logger
+	Log *slog.Logger
+
+	chMu     sync.RWMutex
 	channels []Channel
 }
 
@@ -49,16 +52,38 @@ func NewManager(log *slog.Logger, channels ...Channel) *Manager {
 	return &Manager{Log: log, channels: channels}
 }
 
-// Enabled reports whether any channel is configured.
-func (m *Manager) Enabled() bool { return m != nil && len(m.channels) > 0 }
+// SetChannels atomically replaces the channel set.
+func (m *Manager) SetChannels(channels ...Channel) {
+	if m == nil {
+		return
+	}
+	m.chMu.Lock()
+	m.channels = channels
+	m.chMu.Unlock()
+}
 
-// ChannelNames lists configured channels (for /meta and the test endpoint).
-func (m *Manager) ChannelNames() []string {
+func (m *Manager) snapshot() []Channel {
 	if m == nil {
 		return nil
 	}
-	names := make([]string, 0, len(m.channels))
-	for _, c := range m.channels {
+	m.chMu.RLock()
+	defer m.chMu.RUnlock()
+	out := make([]Channel, len(m.channels))
+	copy(out, m.channels)
+	return out
+}
+
+// Enabled reports whether any channel is configured.
+func (m *Manager) Enabled() bool { return len(m.snapshot()) > 0 }
+
+// ChannelNames lists configured channels (for /meta and the test endpoint).
+func (m *Manager) ChannelNames() []string {
+	chs := m.snapshot()
+	if chs == nil {
+		return nil
+	}
+	names := make([]string, 0, len(chs))
+	for _, c := range chs {
 		names = append(names, c.Name())
 	}
 	return names
@@ -66,13 +91,14 @@ func (m *Manager) ChannelNames() []string {
 
 // Send delivers e to every channel concurrently and returns per-channel errors.
 func (m *Manager) Send(ctx context.Context, e Event) map[string]error {
-	if !m.Enabled() {
+	chs := m.snapshot()
+	if len(chs) == 0 {
 		return nil
 	}
-	errs := make(map[string]error, len(m.channels))
+	errs := make(map[string]error, len(chs))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, c := range m.channels {
+	for _, c := range chs {
 		wg.Add(1)
 		go func(c Channel) {
 			defer wg.Done()

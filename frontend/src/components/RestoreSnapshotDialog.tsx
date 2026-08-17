@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api, type K8sObject } from '../api'
-import { guessPvc } from '../lib/snapshots'
+import { sourcePvcCandidates } from '../lib/snapshots'
 import { Alert } from './ui/alert'
 import { Button } from './ui/button'
 import {
@@ -14,7 +15,9 @@ import {
 import { Input } from './ui/input'
 
 // Shared type-to-confirm restore dialog (used by the Snapshots page and the
-// dashboard activity drill-down). Navigates to /restores on success.
+// dashboard activity drill-down). The restore target is locked to the PVC the
+// snapshot was taken from — the backend enforces the same rule — so a snapshot
+// can never be restored onto a different volume by retyping the target.
 export default function RestoreSnapshotDialog({
   snapshot,
   onClose,
@@ -22,26 +25,27 @@ export default function RestoreSnapshotDialog({
   snapshot: K8sObject | null
   onClose: () => void
 }) {
-  const [pvcNamespace, setPvcNamespace] = useState('')
+  const navigate = useNavigate()
   const [pvcName, setPvcName] = useState('')
   const [confirmText, setConfirmText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const candidates = useMemo(
+    () => (snapshot ? sourcePvcCandidates(snapshot) : []),
+    [snapshot],
+  )
+  const pvcNamespace = snapshot?.namespace || ''
+
   useEffect(() => {
     if (!snapshot) return
-    setPvcNamespace(snapshot.namespace || '')
-    setPvcName(guessPvc(snapshot))
+    setPvcName(sourcePvcCandidates(snapshot)[0] || '')
     setConfirmText('')
     setError('')
   }, [snapshot])
 
   async function submit() {
-    if (!snapshot || confirmText !== 'restore') return
-    if (!pvcNamespace || !pvcName) {
-      setError('PVC namespace and name are required')
-      return
-    }
+    if (!snapshot || confirmText !== 'restore' || !pvcName) return
     setBusy(true)
     setError('')
     try {
@@ -52,7 +56,7 @@ export default function RestoreSnapshotDialog({
         pvcName,
       })
       onClose()
-      window.location.href = '/restores'
+      navigate('/restores')
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -70,21 +74,43 @@ export default function RestoreSnapshotDialog({
             <span className="font-mono text-foreground">
               {snapshot?.namespace}/{snapshot?.name}
             </span>{' '}
-            onto a PVC. Argo CD reconciliation is paused cluster-wide for the duration, the
-            workload is scaled to 0, then brought back.
+            back onto the PVC it was taken from. Argo CD reconciliation is paused cluster-wide
+            for the duration, the workload is scaled to 0, then brought back.
           </DialogDescription>
         </DialogHeader>
 
         {error && <Alert variant="danger">{error}</Alert>}
+        {candidates.length === 0 && (
+          <Alert variant="danger">
+            This snapshot has no restorable PVC source (e.g. an application-level dump). It
+            cannot be restored onto a volume from here.
+          </Alert>
+        )}
 
         <div className="grid gap-3 py-2">
           <div className="grid gap-1.5">
-            <label className="text-xs text-muted-foreground">PVC namespace</label>
-            <Input value={pvcNamespace} onChange={(e) => setPvcNamespace(e.target.value)} />
-          </div>
-          <div className="grid gap-1.5">
-            <label className="text-xs text-muted-foreground">PVC name</label>
-            <Input value={pvcName} onChange={(e) => setPvcName(e.target.value)} />
+            <label className="text-xs text-muted-foreground">Restore target (locked to source)</label>
+            {candidates.length > 1 ? (
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 font-mono text-sm"
+                value={pvcName}
+                onChange={(e) => setPvcName(e.target.value)}
+              >
+                {candidates.map((c) => (
+                  <option key={c} value={c}>
+                    {pvcNamespace}/{c}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm">
+                {candidates.length === 1 ? `${pvcNamespace}/${candidates[0]}` : '—'}
+              </div>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Snapshots can only be restored to the PVC they backed up — the server rejects any
+              other target.
+            </p>
           </div>
           <div className="grid gap-1.5">
             <label className="text-xs text-muted-foreground">

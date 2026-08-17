@@ -5,6 +5,7 @@ import { api, type K8sObject } from '../api'
 import { formatWhen } from '../lib/utils'
 import { snapSpec, snapTime, workloadFromPaths } from '../lib/snapshots'
 import RestoreSnapshotDialog from '../components/RestoreSnapshotDialog'
+import SnapshotCalendar, { dayKey } from '../components/SnapshotCalendar'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -21,6 +22,7 @@ export default function Snapshots() {
   const [items, setItems] = useState<K8sObject[]>([])
   const [error, setError] = useState('')
   const [filter, setFilter] = useState(nsParam)
+  const [selectedDay, setSelectedDay] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Record<string, boolean>>(
     nsParam ? { [nsParam]: true } : {},
   )
@@ -32,9 +34,11 @@ export default function Snapshots() {
     api.snapshots().then(setItems).catch((e: Error) => setError(e.message))
   }, [])
 
-  const groups = useMemo(() => {
+  // Snapshots matching the text filter — the calendar shades these, so it
+  // reflects e.g. a namespace search.
+  const textFiltered = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    const filtered = items.filter((s) => {
+    return items.filter((s) => {
       if (!q) return true
       const spec = snapSpec(s)
       const hay = [s.namespace, s.name, ...(spec.paths || []), spec.id, spec.repository]
@@ -42,6 +46,14 @@ export default function Snapshots() {
         .join(' ')
         .toLowerCase()
       return hay.includes(q)
+    })
+  }, [items, filter])
+
+  const groups = useMemo(() => {
+    const filtered = textFiltered.filter((s) => {
+      if (!selectedDay) return true
+      const t = snapTime(s)
+      return t > 0 && dayKey(new Date(t)) === selectedDay
     })
 
     const map = new Map<string, K8sObject[]>()
@@ -56,7 +68,20 @@ export default function Snapshots() {
     }))
     out.sort((a, b) => a.namespace.localeCompare(b.namespace))
     return out
-  }, [items, filter])
+  }, [textFiltered, selectedDay])
+
+  // Picking a day narrows the list to a handful — open everything.
+  function selectDay(day: string | null) {
+    setSelectedDay(day)
+    if (day) {
+      const next: Record<string, boolean> = {}
+      for (const s of textFiltered) {
+        const t = snapTime(s)
+        if (t > 0 && dayKey(new Date(t)) === day) next[s.namespace || 'default'] = true
+      }
+      setExpanded(next)
+    }
+  }
 
   const total = groups.reduce((n, g) => n + g.items.length, 0)
 
@@ -79,7 +104,13 @@ export default function Snapshots() {
           />
           <span className="text-sm text-muted-foreground">
             {groups.length} namespaces · {total} snapshots
+            {selectedDay ? ` · on ${selectedDay}` : ''}
           </span>
+          {selectedDay && (
+            <Badge variant="secondary" className="cursor-pointer" onClick={() => selectDay(null)}>
+              {selectedDay} ✕
+            </Badge>
+          )}
           <div className="ml-auto flex gap-2">
             <Button
               type="button"
@@ -98,6 +129,20 @@ export default function Snapshots() {
             </Button>
           </div>
         </CardHeader>
+        <CardContent className="border-t pt-4">
+          <div className="flex flex-wrap items-start gap-6">
+            <SnapshotCalendar snapshots={textFiltered} selected={selectedDay} onSelect={selectDay} />
+            <div className="min-w-[200px] flex-1 text-sm text-muted-foreground">
+              <p>
+                Pick a day to jump to that day's restore points — shading follows the text filter
+                above. Days are shown in your local timezone.
+              </p>
+              {selectedDay && total === 0 && (
+                <p className="mt-2">No snapshots on {selectedDay} match the current filter.</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
       </Card>
 
       {groups.length === 0 && (

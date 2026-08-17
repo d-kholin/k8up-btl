@@ -11,7 +11,7 @@ import {
   PieChart,
   RefreshCw,
 } from 'lucide-react'
-import { api, type AuditEntry, type BackupEvent, type K8sObject, type PVCRef, type RestoreState, type StorageStats } from '../api'
+import { api, type AuditSummary, type BackupEvent, type K8sObject, type PVCRef, type RestoreState, type StorageStats } from '../api'
 import { formatBytes, formatWhen } from '../lib/utils'
 import BackupActivity from '../components/BackupActivity'
 import BackupFreshness from '../components/BackupFreshness'
@@ -40,7 +40,7 @@ export default function Dashboard() {
   const [schedules, setSchedules] = useState<K8sObject[]>([])
   const [snapshots, setSnapshots] = useState<K8sObject[]>([])
   const [jobs, setJobs] = useState<Record<string, K8sObject[] | { error: string }>>({})
-  const [audit, setAudit] = useState<AuditEntry[]>([])
+  const [auditSummary, setAuditSummary] = useState<AuditSummary | null>(null)
   const [interrupted, setInterrupted] = useState<RestoreState[]>([])
   const [history, setHistory] = useState<BackupEvent[]>([])
   const [pvcs, setPvcs] = useState<PVCRef[] | null>(null)
@@ -67,7 +67,7 @@ export default function Dashboard() {
       api.schedules(),
       api.snapshots(),
       api.jobs(),
-      api.audit(),
+      api.auditSummary(),
       api.interrupted(),
       api.meta(),
       api.backupHistory(366),
@@ -76,7 +76,7 @@ export default function Dashboard() {
         setSchedules(sch)
         setSnapshots(sn)
         setJobs(j)
-        setAudit(a)
+        setAuditSummary(a)
         setInterrupted(i)
         setMeta(m)
         setHistory(h.events)
@@ -184,12 +184,11 @@ export default function Dashboard() {
       return tb - ta
     })[0]
 
-    const restoreAudit = audit.filter((e) => e.kind === 'restore')
-    const restoreOk = restoreAudit.filter((e) => e.status === 'success').length
-    const restoreFail = restoreAudit.filter((e) => e.status === 'failed').length
-    const bytesDownloaded = audit
-      .filter((e) => e.kind === 'download')
-      .reduce((n, e) => n + (e.bytes || 0), 0)
+    // Server-side SQL aggregates over the full retention window (the old
+    // client-side count over a 200-row page silently under-reported).
+    const restoreOk = auditSummary?.restoreOk ?? 0
+    const restoreFail = auditSummary?.restoreFail ?? 0
+    const bytesDownloaded = auditSummary?.downloadBytes ?? 0
 
     // Workload keys from snapshot paths (approx restore targets)
     const workloads = new Set(
@@ -215,9 +214,9 @@ export default function Dashboard() {
       restoreOk,
       restoreFail,
       bytesDownloaded,
-      latestRestore: restoreAudit[0],
+      latestRestore: auditSummary?.latestRestore,
     }
-  }, [schedules, snapshots, jobs, audit])
+  }, [schedules, snapshots, jobs, auditSummary])
 
   const byNamespace = useMemo(() => {
     const m = new Map<string, number>()

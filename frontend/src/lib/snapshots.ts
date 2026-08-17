@@ -19,10 +19,19 @@ export function workloadFromPaths(paths: string[]): string {
 }
 
 export function guessPvc(s: K8sObject): string {
+  return sourcePvcCandidates(s)[0] || ''
+}
+
+// sourcePvcCandidates mirrors the backend's SourcePVCCandidates: the PVC names
+// a snapshot was taken from, derived from spec.paths (K8up mounts each PVC at
+// /data/<pvcName>). Restores are only allowed onto one of these.
+export function sourcePvcCandidates(s: K8sObject): string[] {
   const paths = snapSpec(s).paths || []
-  return (
-    paths
-      .map((p) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '')
-      .find((b) => b && !b.endsWith('.sql')) || ''
-  )
+  const out: string[] = []
+  for (const p of paths) {
+    const base = p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || ''
+    if (!base || base.endsWith('.sql')) continue
+    if (!out.includes(base)) out.push(base)
+  }
+  return out
 }

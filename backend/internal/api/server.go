@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,6 +39,12 @@ type Server struct {
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
+
+	// cluster connectivity, maintained by StartClusterMonitor.
+	clusterMu  sync.RWMutex
+	clusterOK  bool
+	clusterErr string
+	clusterAt  time.Time
 }
 
 func NewServer(cfg config.Config, clients *k8s.Clients, orch *restore.Orchestrator, store *audit.Store, log *slog.Logger) *Server {
@@ -66,6 +73,22 @@ func NewServer(cfg config.Config, clients *k8s.Clients, orch *restore.Orchestrat
 		})
 		s.broadcast(b)
 	}
+	// The orchestrator reports bytes recovered as the snapshot's restore-size;
+	// credential/repo resolution lives here, not in the restore package.
+	orch.SnapshotSize = func(ctx context.Context, snapNS, snapName, snapID string) (int64, error) {
+		repo, resolvedID, err := s.repoEnvForSnapshot(ctx, snapNS, snapName)
+		if err != nil {
+			return 0, err
+		}
+		if snapID == "" {
+			snapID = resolvedID
+		}
+		stats, err := s.Restic.Stats(ctx, repo, snapID, "restore-size")
+		if err != nil {
+			return 0, err
+		}
+		return jsonInt64(stats, "total_size"), nil
+	}
 	return s
 }
 
@@ -73,6 +96,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("GET /readyz", s.handleReady)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("GET /api/v1/me", s.handleMe)
 	mux.HandleFunc("GET /api/v1/schedules", s.handleListSchedules)
 	mux.HandleFunc("GET /api/v1/snapshots", s.handleListSnapshots)
@@ -82,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/restores/{id}", s.handleGetRestore)
 	mux.HandleFunc("GET /api/v1/restores/{id}/logs", s.handleRestoreLogs)
 	mux.HandleFunc("POST /api/v1/restores/{id}/resume-argo", s.handleResumeArgoByRestore)
+	mux.HandleFunc("POST /api/v1/restores/{id}/cancel", s.handleCancelRestore)
 	mux.HandleFunc("POST /api/v1/argo/{namespace}/{name}/resume", s.handleResumeArgo)
 	mux.HandleFunc("GET /api/v1/interrupted", s.handleInterrupted)
 	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/files", s.handleListFiles)
@@ -91,6 +117,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/backups", s.handleCreateBackup)
 	mux.HandleFunc("POST /api/v1/checks", s.handleCreateCheck)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/v1/audit/summary", s.handleAuditSummary)
+	mux.HandleFunc("GET /api/v1/audit/export.csv", s.handleAuditExport)
+	mux.HandleFunc("GET /api/v1/settings/notifications", s.handleGetNotifySettings)
+	mux.HandleFunc("PUT /api/v1/settings/notifications", s.handlePutNotifySettings)
 	mux.HandleFunc("GET /api/v1/history/backups", s.handleBackupHistory)
 	mux.HandleFunc("GET /api/v1/pvcs", s.handleListPVCs)
 	mux.HandleFunc("GET /api/v1/meta", s.handleMeta)
@@ -112,7 +142,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) withSPA(api http.Handler, fs http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
 			api.ServeHTTP(w, r)
 			return
 		}
@@ -124,8 +154,37 @@ func (s *Server) withSPA(api http.Handler, fs http.Handler) http.Handler {
 	})
 }
 
+// handleHealth is the liveness probe: always 200 while the process runs, but
+// honest about cluster connectivity so operators can see degraded mode.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	cl := s.clusterStatus()
+	status := "ok"
+	if !cl.Connected {
+		status = "degraded"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": status, "cluster": cl})
+}
+
+// handleReady is the readiness probe: 503 until the Kubernetes API is reachable.
+func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+	cl := s.clusterStatus()
+	code := http.StatusOK
+	status := "ok"
+	if !cl.Connected {
+		code = http.StatusServiceUnavailable
+		status = "degraded"
+	}
+	writeJSON(w, code, map[string]any{"status": status, "cluster": cl})
+}
+
+func (s *Server) handleCancelRestore(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.FromContext(r.Context())
+	id := r.PathValue("id")
+	if err := s.Orch.Cancel(id, u.Username); err != nil {
+		s.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancel_requested"})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +247,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
 		"prometheusConfigured": s.Cfg.PrometheusURL != "",
 		"argocdNamespace":      s.Cfg.ArgoCDNamespace,
 		"notifyChannels":       channels,
+		"cluster":              s.clusterStatus(),
 	})
 }
 
@@ -195,7 +255,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
 // reports per-channel delivery results.
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 	if !s.Notify.Enabled() {
-		http.Error(w, "no notification channels configured (set NTFY_TOPIC and/or SMTP_HOST+SMTP_FROM+SMTP_TO)", http.StatusServiceUnavailable)
+		http.Error(w, "no notification channels configured (set NTFY_TOPIC and/or SMTP_HOST+SMTP_FROM+SMTP_TO, or configure them on the Settings page)", http.StatusServiceUnavailable)
 		return
 	}
 	u, _ := auth.FromContext(r.Context())
@@ -606,9 +666,43 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request, kind string, 
 	writeJSON(w, http.StatusCreated, summarizeObj(obj))
 }
 
+func auditFilterFromQuery(r *http.Request) audit.ListFilter {
+	q := r.URL.Query()
+	f := audit.ListFilter{
+		Kind:   q.Get("kind"),
+		Actor:  q.Get("actor"),
+		Status: q.Get("status"),
+	}
+	if v := q.Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Since = t
+		} else if t, err := time.Parse("2006-01-02", v); err == nil {
+			f.Since = t
+		}
+	}
+	if v := q.Get("until"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Until = t
+		} else if t, err := time.Parse("2006-01-02", v); err == nil {
+			// inclusive day: bump to end of day
+			f.Until = t.Add(24*time.Hour - time.Nanosecond)
+		}
+	}
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n >= 0 {
+		f.Offset = n
+	}
+	return f
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	kind := r.URL.Query().Get("kind")
-	entries, err := s.Audit.List(r.Context(), audit.ListFilter{Kind: kind, Limit: 200})
+	f := auditFilterFromQuery(r)
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	entries, err := s.Audit.List(r.Context(), f)
 	if err != nil {
 		s.writeErr(w, err, http.StatusInternalServerError)
 		return
@@ -616,7 +710,56 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []audit.Entry{}
 	}
-	writeJSON(w, http.StatusOK, entries)
+	total, err := s.Audit.Count(r.Context(), f)
+	if err != nil {
+		s.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": entries,
+		"total":   total,
+		"limit":   f.Limit,
+		"offset":  f.Offset,
+	})
+}
+
+// handleAuditSummary serves SQL-aggregated counters (the dashboard used to
+// derive these from a truncated 200-row window, silently under-reporting).
+func (s *Server) handleAuditSummary(w http.ResponseWriter, r *http.Request) {
+	sum, err := s.Audit.Summary(r.Context())
+	if err != nil {
+		s.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	f := auditFilterFromQuery(r)
+	// Export ignores pagination; cap generously to bound memory.
+	f.Offset = 0
+	f.Limit = 100000
+	entries, err := s.Audit.List(r.Context(), f)
+	if err != nil {
+		s.writeErr(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="k8up-btl-audit.csv"`)
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"at", "kind", "actor", "status", "namespace", "pvc", "snapshot", "path", "bytes", "restoreId", "argoApp", "argoPaused", "detail"})
+	for _, e := range entries {
+		paused := ""
+		if e.ArgoPaused != nil {
+			paused = strconv.FormatBool(*e.ArgoPaused)
+		}
+		_ = cw.Write([]string{
+			e.At.UTC().Format(time.RFC3339), e.Kind, e.Actor, e.Status,
+			e.Namespace, e.PVC, e.Snapshot, e.Path,
+			strconv.FormatInt(e.Bytes, 10), e.RestoreID, e.ArgoApp, paused, e.Detail,
+		})
+	}
+	cw.Flush()
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {

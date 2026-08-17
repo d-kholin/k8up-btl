@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type RestoreState } from '../api'
-import { cn, formatWhen } from '../lib/utils'
+import { cn, formatBytes, formatWhen } from '../lib/utils'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -151,6 +151,9 @@ export default function Restores() {
                         }
                       >
                         {r.step}
+                        {r.step === 'restoring' && r.progressPercent != null
+                          ? ` ${Math.round(r.progressPercent)}%`
+                          : ''}
                       </Badge>
                     </TableCell>
                     <TableCell className="max-w-[140px] truncate font-mono text-xs">
@@ -191,20 +194,38 @@ export default function Restores() {
                 )}
               </CardDescription>
             </div>
-            {selected?.argoSyncResumed === false && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={() =>
-                  api
-                    .resumeArgo('argocd', 'application-controller')
-                    .then(load)
-                    .catch((e: Error) => setError(e.message))
-                }
-              >
-                Resume Argo controller
-              </Button>
-            )}
+            <div className="flex gap-2">
+              {selected && !['done', 'failed'].includes(selected.step) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={selected.cancelRequested}
+                  onClick={() => {
+                    if (!window.confirm('Cancel this restore? The volume may be left with a partial restore.')) return
+                    api
+                      .cancelRestore(selected.restoreId)
+                      .then(load)
+                      .catch((e: Error) => setError(e.message))
+                  }}
+                >
+                  {selected.cancelRequested ? 'Cancelling…' : 'Cancel restore'}
+                </Button>
+              )}
+              {selected?.argoSyncResumed === false && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() =>
+                    api
+                      .resumeArgo('argocd', 'application-controller')
+                      .then(load)
+                      .catch((e: Error) => setError(e.message))
+                  }
+                >
+                  Resume Argo controller
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {selected?.lastError && (
@@ -212,6 +233,22 @@ export default function Restores() {
                 {selected.lastError}
               </Alert>
             )}
+            {selected &&
+              selected.step === 'restoring' &&
+              selected.progressPercent != null && (
+                <div className="mb-3 shrink-0">
+                  <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+                    <span>restic progress (from job logs)</span>
+                    <span>{Math.round(selected.progressPercent)}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all"
+                      style={{ width: `${Math.min(100, selected.progressPercent)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             {/* Independent scrollport: fills remaining card height; does not grow the page */}
             <div
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none]"
@@ -244,11 +281,17 @@ export default function Restores() {
                 {selected.step === 'done' && selected.argoSyncResumed !== false && (
                   <Badge variant="success">complete, Argo resumed</Badge>
                 )}
-                {selected.step === 'failed' && selected.argoSyncResumed && (
+                {selected.step === 'failed' && selected.cancelled && (
+                  <Badge variant="warning">cancelled by operator</Badge>
+                )}
+                {selected.step === 'failed' && !selected.cancelled && selected.argoSyncResumed && (
                   <Badge variant="warning">failed, Argo resumed</Badge>
                 )}
                 {selected.step === 'failed' && selected.argoSyncResumed === false && (
                   <Badge variant="danger">failed, Argo still stopped</Badge>
+                )}
+                {selected.step === 'done' && !!selected.bytesRecovered && (
+                  <span>{formatBytes(selected.bytesRecovered)} restored</span>
                 )}
                 <span>{lines.length} lines</span>
               </div>

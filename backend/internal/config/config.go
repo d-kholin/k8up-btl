@@ -155,6 +155,69 @@ func (c Config) DevMode() bool {
         return strings.TrimSpace(c.DevAuthUser) != ""
 }
 
+// NotifyOverrides are UI-managed notification settings persisted in SQLite.
+// The env (git-managed) config is the baseline; any non-zero field here wins.
+// Empty string / 0 means "no override — use the env value".
+type NotifyOverrides struct {
+        NtfyServer   string `json:"ntfyServer,omitempty"`
+        NtfyTopic    string `json:"ntfyTopic,omitempty"`
+        NtfyToken    string `json:"ntfyToken,omitempty"`
+        NtfyDisabled bool   `json:"ntfyDisabled,omitempty"`
+
+        SMTPHost      string `json:"smtpHost,omitempty"`
+        SMTPPort      int    `json:"smtpPort,omitempty"`
+        SMTPTLS       string `json:"smtpTls,omitempty"`
+        SMTPUser      string `json:"smtpUser,omitempty"`
+        SMTPPass      string `json:"smtpPass,omitempty"`
+        SMTPFrom      string `json:"smtpFrom,omitempty"`
+        SMTPTo        string `json:"smtpTo,omitempty"` // CSV
+        EmailDisabled bool   `json:"emailDisabled,omitempty"`
+}
+
+// WithNotifyOverrides returns a copy of c with the overrides applied. Disabled
+// flags blank out the channel's enabling fields so *Enabled() reports false
+// even when env configures the channel.
+func (c Config) WithNotifyOverrides(o NotifyOverrides) Config {
+        out := c
+        if o.NtfyServer != "" {
+                out.NtfyServer = o.NtfyServer
+        }
+        if o.NtfyTopic != "" {
+                out.NtfyTopic = o.NtfyTopic
+        }
+        if o.NtfyToken != "" {
+                out.NtfyToken = o.NtfyToken
+        }
+        if o.NtfyDisabled {
+                out.NtfyTopic = ""
+        }
+        if o.SMTPHost != "" {
+                out.SMTPHost = o.SMTPHost
+        }
+        if o.SMTPPort != 0 {
+                out.SMTPPort = o.SMTPPort
+        }
+        if o.SMTPTLS != "" {
+                out.SMTPTLS = o.SMTPTLS
+        }
+        if o.SMTPUser != "" {
+                out.SMTPUser = o.SMTPUser
+        }
+        if o.SMTPPass != "" {
+                out.SMTPPass = o.SMTPPass
+        }
+        if o.SMTPFrom != "" {
+                out.SMTPFrom = o.SMTPFrom
+        }
+        if o.SMTPTo != "" {
+                out.SMTPTo = splitCSV(o.SMTPTo)
+        }
+        if o.EmailDisabled {
+                out.SMTPHost = ""
+        }
+        return out
+}
+
 // NtfyEnabled / EmailEnabled report whether each notification channel has the
 // minimum config to be constructed.
 func (c Config) NtfyEnabled() bool { return c.NtfyTopic != "" }

@@ -14,12 +14,14 @@ Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance 
 | Area | Capability |
 |------|------------|
 | Visibility | Cluster-wide Schedules, Snapshots, live Backup/Restore/Check/Prune status |
-| Restore | One-click restore with Argo pause/resume, durable mid-restore state |
-| Browse | Per-snapshot file tree + file/folder/snapshot download via `restic` (read-only) |
+| Restore | One-click restore with Argo pause/resume, durable mid-restore state, live progress, cancel |
+| Safety | Restore targets are locked to the PVC a snapshot was taken from (server-enforced) |
+| Browse | Per-snapshot file tree + file/folder/snapshot download via `restic` (read-only), calendar day picker |
 | Compare | Diff two snapshots (`restic diff`): added/removed/modified files with byte deltas |
-| Notify | ntfy + email alerts for job failures, restore outcomes, interrupted restores |
+| Notify | ntfy + email alerts for job failures, restore outcomes, interrupted restores; env config with UI overrides |
 | Actions | Ad-hoc Backup / Check CRs |
-| Audit | 90-day restore + download history |
+| Audit | 90-day restore + download history, filterable + paginated + CSV export |
+| Health | `/healthz` (liveness), `/readyz` (cluster connectivity), `/metrics` (Prometheus), degraded-mode banner |
 | Auth | No in-app auth; Pangolin + Newt NetworkPolicy only |
 
 Full product requirements: [`docs/PRD.md`](docs/PRD.md).
@@ -100,7 +102,9 @@ npm run dev
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | _(empty)_ | Optional SMTP auth |
 | `NOTIFY_RESTORE_SUCCESS` | `true` | Also notify on successful GUI restores |
 
-With any channel configured, the backend alerts on: failed Backup/Check/Prune/Restore jobs (detected by the history sweeper, restart-safe), GUI restore completion/failure (including "Argo still paused" attention states), and interrupted restores found at startup. Verify delivery with `curl -X POST .../api/v1/notify/test`.
+With any channel configured, the backend alerts on: failed Backup/Check/Prune/Restore jobs (detected by the history sweeper, restart-safe), GUI restore completion/failure/cancellation (including "Argo still paused" attention states), and interrupted restores found at startup. Verify delivery with the **Send test** button on the Settings page (or `curl -X POST .../api/v1/notify/test`).
+
+Env vars (git-managed manifests) are the notification **baseline**; the in-app Settings page can override any field at runtime (stored in the SQLite DB on `/data`, applied without restart). Blank UI fields fall back to the env value; secrets are write-only through the API.
 
 ## Deploy (cluster)
 

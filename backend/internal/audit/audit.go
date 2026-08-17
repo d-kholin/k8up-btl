@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -97,6 +98,13 @@ CREATE TABLE IF NOT EXISTS backup_events (
 );
 CREATE INDEX IF NOT EXISTS idx_backup_events_started ON backup_events(started_at);
 CREATE INDEX IF NOT EXISTS idx_backup_events_kind ON backup_events(kind);
+
+-- Small key/value store for runtime settings (e.g. notification overrides).
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `)
 	return err
 }
@@ -128,21 +136,54 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 type ListFilter struct {
 	Kind   string
+	Actor  string
+	Status string
+	Since  time.Time
+	Until  time.Time
 	Limit  int
 	Offset int
 }
 
+func (f ListFilter) where() (string, []any) {
+	var conds []string
+	var args []any
+	if f.Kind != "" {
+		conds = append(conds, "kind = ?")
+		args = append(args, f.Kind)
+	}
+	if f.Actor != "" {
+		conds = append(conds, "actor = ?")
+		args = append(args, f.Actor)
+	}
+	if f.Status != "" {
+		conds = append(conds, "status = ?")
+		args = append(args, f.Status)
+	}
+	if !f.Since.IsZero() {
+		conds = append(conds, "at >= ?")
+		args = append(args, f.Since.UTC().Format(time.RFC3339Nano))
+	}
+	if !f.Until.IsZero() {
+		conds = append(conds, "at <= ?")
+		args = append(args, f.Until.UTC().Format(time.RFC3339Nano))
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Entry, error) {
-	if f.Limit <= 0 || f.Limit > 500 {
+	if f.Limit <= 0 {
 		f.Limit = 100
+	}
+	if f.Limit > 100000 {
+		f.Limit = 100000
 	}
 	q := `SELECT id, kind, actor, at, namespace, snapshot, pvc, path, status, detail, bytes, restore_id, argo_app, argo_paused
 FROM audit`
-	args := []any{}
-	if f.Kind != "" {
-		q += ` WHERE kind = ?`
-		args = append(args, f.Kind)
-	}
+	where, args := f.where()
+	q += where
 	q += ` ORDER BY at DESC LIMIT ? OFFSET ?`
 	args = append(args, f.Limit, f.Offset)
 
@@ -177,6 +218,81 @@ FROM audit`
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// Count returns the total rows matching the filter (ignores Limit/Offset).
+func (s *Store) Count(ctx context.Context, f ListFilter) (int64, error) {
+	where, args := f.where()
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit`+where, args...).Scan(&n)
+	return n, err
+}
+
+// Summary aggregates the counters the dashboard shows, in SQL, over the full
+// retention window — never over a truncated page.
+type Summary struct {
+	RestoreOK     int64  `json:"restoreOk"`
+	RestoreFail   int64  `json:"restoreFail"`
+	DownloadBytes int64  `json:"downloadBytes"`
+	LatestRestore *Entry `json:"latestRestore,omitempty"`
+}
+
+func (s *Store) Summary(ctx context.Context) (*Summary, error) {
+	out := &Summary{}
+	err := s.db.QueryRowContext(ctx, `
+SELECT
+  COALESCE(SUM(CASE WHEN kind='restore' AND status='success' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN kind='restore' AND status='failed' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN kind='download' THEN bytes ELSE 0 END), 0)
+FROM audit`).Scan(&out.RestoreOK, &out.RestoreFail, &out.DownloadBytes)
+	if err != nil {
+		return nil, err
+	}
+	latest, err := s.List(ctx, ListFilter{Kind: "restore", Limit: 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(latest) > 0 {
+		out.LatestRestore = &latest[0]
+	}
+	return out, nil
+}
+
+// CountBackupEvents returns totals keyed "kind|status" for /metrics.
+func (s *Store) CountBackupEvents(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT kind, status, COUNT(*) FROM backup_events GROUP BY kind, status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var kind, status string
+		var n int64
+		if err := rows.Scan(&kind, &status, &n); err != nil {
+			return nil, err
+		}
+		out[kind+"|"+status] = n
+	}
+	return out, rows.Err()
+}
+
+// GetSetting returns "" when the key does not exist.
+func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		key, value, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
 }
 
 func (s *Store) PruneOlderThan(ctx context.Context, retention time.Duration) (int64, error) {

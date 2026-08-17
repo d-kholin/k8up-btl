@@ -570,3 +570,10 @@ func (c *Clients) GetSnapshot(ctx context.Context, ns, name string) (*unstructur
 func (c *Clients) GetRestore(ctx context.Context, ns, name string) (*unstructured.Unstructured, error) {
         return c.Dynamic.Resource(GVRRestore).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 }
+
+// DeleteRestore removes a Restore CR; its Job is cascade-deleted via owner
+// references (used when an operator cancels an in-flight restore).
+func (c *Clients) DeleteRestore(ctx context.Context, ns, name string) error {
+        fg := metav1.DeletePropagationForeground
+        return c.Dynamic.Resource(GVRRestore).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &fg})
+}
