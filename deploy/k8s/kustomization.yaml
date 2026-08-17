@@ -14,8 +14,4 @@ labels:
     includeSelectors: false
 images:
   - name: ghcr.io/d-kholin/k8up-btl
-    newTag: latest
-# After first publish, prefer digest pin:
-# images:
-#   - name: ghcr.io/d-kholin/k8up-btl
-#     digest: sha256:...
+    newTag: "1.0.0"

@@ -44,18 +44,21 @@ kustomize edit set image ghcr.io/d-kholin/k8up-btl:sha-abc1234
 kubectl apply -k .
 ```
 
-### Private package pull (current default)
+### Image pull
 
-Deploy references `imagePullSecrets: [ghcr-pull]`. Create once:
+Package is intended **public** (`ghcr.io/d-kholin/k8up-btl`). No pull secret.
+
+If a private package remains, create once:
 
 ```bash
 kubectl -n k8up-gui create secret docker-registry ghcr-pull \
   --docker-server=ghcr.io \
   --docker-username=d-kholin \
   --docker-password=GITHUB_PAT_WITH_READ_PACKAGES
+# and add imagePullSecrets: [{name: ghcr-pull}] on the Deployment
 ```
 
-If you make the GHCR package **public**, remove `imagePullSecrets` from `deployment.yaml` and delete the secret.
+Pin releases via `deploy/k8s/kustomization.yaml` `images.newTag` (e.g. `1.0.0`).
 
 ## Publish image (CI)
 
