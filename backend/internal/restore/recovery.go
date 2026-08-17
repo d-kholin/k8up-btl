@@ -151,6 +151,12 @@ func (o *Orchestrator) StartRecovery(ctx context.Context, req RecoveryRequest) (
 	if err != nil {
 		return nil, err
 	}
+	// Quiescing excludes the DB by its owner workload; without it the DB
+	// itself would be scaled to 0 and the pipe would have nowhere to go.
+	// (Owner resolution for Deployment pods needs `get` on replicasets.)
+	if db.Workload == nil {
+		return nil, fmt.Errorf("cannot resolve the owner workload of DB pod %s/%s — refusing: quiescing would scale the database itself down (check RBAC: replicasets get)", req.Namespace, db.PodName)
+	}
 
 	// Validate additional PVC restores under the same source-lock rule as
 	// plain restores, and resolve their owner workloads for quiescing.
@@ -229,6 +235,12 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 		o.mu.Lock()
 		delete(o.cancels, st.RestoreID)
 		cancelled := st.CancelRequested
+		// Belt-and-braces: Cancel flags the jobs-map entry; honor it even if
+		// something replaced the pointer this goroutine holds.
+		if j, ok := o.jobs[st.RestoreID]; ok && j.CancelRequested {
+			cancelled = true
+			st.CancelRequested = true
+		}
 		o.mu.Unlock()
 
 		if runErr != nil {
@@ -334,7 +346,11 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 			runErr = fmt.Errorf("create safety backup: %w", err)
 			return
 		}
-		safetyCtx, cancelSafety := context.WithTimeout(runCtx, o.RestoreTimeout)
+		safetyTO := o.SafetyBackupTimeout
+		if safetyTO <= 0 {
+			safetyTO = 30 * time.Minute
+		}
+		safetyCtx, cancelSafety := context.WithTimeout(runCtx, safetyTO)
 		err = o.waitJobComplete(safetyCtx, k8s.GVRBackup, st.PVCNamespace, crName)
 		cancelSafety()
 		if err != nil {

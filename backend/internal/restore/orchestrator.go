@@ -126,6 +126,10 @@ type Orchestrator struct {
 	// RequireRestoreAnnotation disables env/derived fallbacks — recovery then
 	// only runs with an explicit k8up-btl.local/restore-command annotation.
 	RequireRestoreAnnotation bool
+	// SafetyBackupTimeout bounds the pre-recovery safety backup wait
+	// (defaults to 30m; a stuck Backup CR must not pin the app down for the
+	// full RestoreTimeout).
+	SafetyBackupTimeout time.Duration
 
 	mu   sync.Mutex
 	jobs map[string]*State
@@ -348,6 +352,12 @@ func (o *Orchestrator) run(st *State) {
 		o.mu.Lock()
 		delete(o.cancels, st.RestoreID)
 		cancelled := st.CancelRequested
+		// Belt-and-braces: Cancel flags the jobs-map entry; honor it even if
+		// something replaced the pointer this goroutine holds.
+		if j, ok := o.jobs[st.RestoreID]; ok && j.CancelRequested {
+			cancelled = true
+			st.CancelRequested = true
+		}
 		o.mu.Unlock()
 
 		// Some client-go paths don't wrap context.Canceled; a requested cancel
@@ -687,6 +697,15 @@ func nestedBool(obj map[string]any, fields ...string) (bool, bool, error) {
 
 // ManualResumeArgo scales the application-controller back up (global unstick).
 func (o *Orchestrator) ManualResumeArgo(ctx context.Context, _appNS, _appName string) error {
+	// Never resume under a live restore — it owns the pause; Argo self-heal
+	// would scale the workload back up while restic writes to its PVC. Cancel
+	// the restore instead; its cleanup resumes Argo.
+	o.mu.Lock()
+	active := o.activeID
+	o.mu.Unlock()
+	if active != "" {
+		return fmt.Errorf("restore %s is running and owns the Argo pause; cancel it instead of resuming manually", active)
+	}
 	raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS)
 	if err != nil {
 		return err
@@ -718,8 +737,19 @@ func (o *Orchestrator) ManualResumeArgo(ctx context.Context, _appNS, _appName st
 }
 
 // ScanInterrupted loads global pause state from the controller STS annotation.
+// A restore actively running in THIS process is never "interrupted" — during a
+// legitimate run the controller is at 0 with the annotation set, which is
+// exactly what this scan looks for. Reporting (and clobbering the in-memory
+// job with the annotation snapshot) here is what made the dashboard flag live
+// recoveries as interrupted.
 func (o *Orchestrator) ScanInterrupted(ctx context.Context) ([]State, error) {
 	if o.Clients == nil {
+		return nil, nil
+	}
+	o.mu.Lock()
+	active := o.activeID
+	o.mu.Unlock()
+	if active != "" {
 		return nil, nil
 	}
 	raw, reps, err := o.Clients.GetArgoControllerPausedState(ctx, o.ArgoNS)

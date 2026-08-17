@@ -61,6 +61,8 @@ type Config struct {
         SQLRestoreCmdMariaDB        string
         SQLRestoreCmdMySQL          string
         SQLRestoreRequireAnnotation bool
+        // SafetyBackupTimeout bounds the pre-recovery safety backup wait.
+        SafetyBackupTimeout time.Duration
 }
 
 // SQLRestoreOverrides maps engine → configured restore command (empty entries
@@ -114,6 +116,7 @@ func Load() Config {
                 SQLRestoreCmdMariaDB:        os.Getenv("SQL_RESTORE_CMD_MARIADB"),
                 SQLRestoreCmdMySQL:          os.Getenv("SQL_RESTORE_CMD_MYSQL"),
                 SQLRestoreRequireAnnotation: boolEnv("SQL_RESTORE_REQUIRE_ANNOTATION", false),
+                SafetyBackupTimeout:         durationEnv("SAFETY_BACKUP_TIMEOUT", 30*time.Minute),
         }
         if cfg.ResticCacheDir == "" {
                 cfg.ResticCacheDir = filepath.Join(filepath.Dir(cfg.AuditDBPath), "restic-cache")

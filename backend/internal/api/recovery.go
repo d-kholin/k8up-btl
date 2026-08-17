@@ -35,6 +35,8 @@ type recoveryDBCandidate struct {
 	QuiesceGrouping string `json:"quiesceGrouping,omitempty"`
 	QuiesceWarning  string `json:"quiesceWarning,omitempty"`
 	HasRestoreCommand bool `json:"hasRestoreCommand"`
+	// Blocked is set when recovery cannot start for this pod at all.
+	Blocked string `json:"blocked,omitempty"`
 }
 
 type recoveryPVCOption struct {
@@ -83,6 +85,9 @@ func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
 			AppGroup:        p.AppGroup,
 			BackupCommand:   p.BackupCommand,
 			WorkloadsToStop: []k8s.ScalableWorkload{},
+		}
+		if p.Workload == nil {
+			c.Blocked = "cannot resolve this pod's owner workload — quiescing would scale the database itself down; check the service account has `get` on replicasets"
 		}
 		if cmd, source, err := s.Orch.ResolveRestoreCommand(&p); err == nil {
 			c.RestoreCommand = cmd

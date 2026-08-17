@@ -54,6 +54,7 @@ func main() {
 	orch := restore.NewOrchestrator(clients, cfg.ArgoCDNamespace, cfg.ScaleDownTimeout, cfg.RestoreTimeout, store, log)
 	orch.RestoreCommandOverrides = cfg.SQLRestoreOverrides()
 	orch.RequireRestoreAnnotation = cfg.SQLRestoreRequireAnnotation
+	orch.SafetyBackupTimeout = cfg.SafetyBackupTimeout
 	// Hydrate completed/historical restore jobs from SQLite on the data PVC.
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

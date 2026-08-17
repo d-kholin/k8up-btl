@@ -68,6 +68,7 @@ export type RecoveryDBCandidate = {
   quiesceGrouping?: string
   quiesceWarning?: string
   hasRestoreCommand: boolean
+  blocked?: string
 }
 
 export type RecoveryPVCOption = {

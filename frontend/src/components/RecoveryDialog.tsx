@@ -88,7 +88,7 @@ export default function RecoveryDialog({
     }
   }
 
-  const canStart = !!db?.hasRestoreCommand && confirmText === 'restore' && !busy
+  const canStart = !!db?.hasRestoreCommand && !db?.blocked && confirmText === 'restore' && !busy
 
   return (
     <Dialog open={!!snapshot} onOpenChange={(o) => !o && onClose()}>
@@ -137,6 +137,7 @@ export default function RecoveryDialog({
               </div>
             )}
 
+            {db?.blocked && <Alert variant="danger">{db.blocked}</Alert>}
             {db && (
               <>
                 <div className="grid gap-1.5">
