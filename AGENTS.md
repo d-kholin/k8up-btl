@@ -20,11 +20,12 @@ K8up backup/restore GUI with Argo CD-aware restore orchestration. Spec: `docs/PR
 5. No k8s/Argo credentials or restic secrets to the browser.
 6. No in-app login; proxy + NetworkPolicy only.
 7. SQL dump recovery only execs git-sourced commands — the
-   `k8up-btl.local/restore-command` pod annotation, `SQL_RESTORE_CMD_*` env
-   config, or a derivation of the pod's own `k8up.io/backupcommand`. Never a
-   command from the request body. Quiescing stops only the app's own workloads
-   (instance label or `k8up-btl.local/quiesce-workloads`), never the whole
-   namespace.
+   `k8up-btl.local/restore-command` annotation (pod or owner workload),
+   `SQL_RESTORE_CMD_*` env config, or a derivation of the pod's own
+   `k8up.io/backupcommand`. Never a command from the request body. Quiesce
+   scope: annotation list → same Argo app (instance label / tracking-id) →
+   whole namespace as last resort, always excluding the DB workload and always
+   shown verbatim in the confirm dialog.
 8. Restore targets are locked to what the snapshot backed up (source PVC from
    `spec.paths`); the server rejects any other target.
 

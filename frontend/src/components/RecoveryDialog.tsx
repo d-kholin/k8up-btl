@@ -175,7 +175,16 @@ export default function RecoveryDialog({
 
                 <div className="grid gap-1.5">
                   <label className="text-xs text-muted-foreground">
-                    Workloads stopped during recovery (this app only)
+                    Workloads stopped during recovery
+                    {db.quiesceGrouping?.startsWith('argo-app:') ? (
+                      <span className="ml-1 opacity-70">
+                        — same Argo app ({db.quiesceGrouping.slice('argo-app:'.length)})
+                      </span>
+                    ) : db.quiesceGrouping === 'annotation' ? (
+                      <span className="ml-1 opacity-70">— from quiesce-workloads annotation</span>
+                    ) : db.quiesceGrouping === 'namespace' ? (
+                      <span className="ml-1 opacity-70">— whole namespace</span>
+                    ) : null}
                   </label>
                   {db.quiesceWarning && <Alert variant="warning">{db.quiesceWarning}</Alert>}
                   {db.workloadsToStop.length > 0 && (
@@ -188,9 +197,9 @@ export default function RecoveryDialog({
                     </div>
                   )}
                   <p className="text-[11px] text-muted-foreground">
-                    Other apps in the namespace are not touched. The DB workload
+                    The DB workload
                     {db.workload ? ` (${db.workload.kind.toLowerCase()}/${db.workload.name})` : ''} stays
-                    up to receive the dump.
+                    up to receive the dump. Nothing outside this list is touched.
                   </p>
                 </div>
               </>

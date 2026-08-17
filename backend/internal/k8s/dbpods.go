@@ -33,8 +33,24 @@ type DBPod struct {
 	BackupCommand  string       `json:"backupCommand"`
 	RestoreCommand string       `json:"restoreCommand,omitempty"`
 	QuiesceRaw     string       `json:"-"`
-	Instance       string       `json:"instance,omitempty"`
-	Workload       *WorkloadRef `json:"workload,omitempty"`
+	// AppGroup is the Argo app this database belongs to, read from the pod or
+	// its owner workload (instance label or Argo tracking-id annotation, both
+	// applied by Argo at deploy time — nothing to add to app manifests).
+	AppGroup string       `json:"appGroup,omitempty"`
+	Workload *WorkloadRef `json:"workload,omitempty"`
+}
+
+// appGroupOf extracts the Argo app grouping from object metadata: the
+// app.kubernetes.io/instance label (label tracking) or the app name prefix of
+// argocd.argoproj.io/tracking-id (annotation tracking).
+func appGroupOf(labels, anns map[string]string) string {
+	if v := labels[LabelInstance]; v != "" {
+		return v
+	}
+	if tid := anns[AnnTrackingID]; tid != "" {
+		return strings.SplitN(tid, ":", 2)[0]
+	}
+	return ""
 }
 
 // ListBackupCommandPods returns running pods in the namespace annotated with a
@@ -62,10 +78,24 @@ func (c *Clients) ListBackupCommandPods(ctx context.Context, ns string) ([]DBPod
 			BackupCommand:  cmd,
 			RestoreCommand: p.Annotations[AnnRestoreCommand],
 			QuiesceRaw:     p.Annotations[AnnQuiesceWorkloads],
-			Instance:       p.Labels["app.kubernetes.io/instance"],
+			AppGroup:       appGroupOf(p.Labels, p.Annotations),
 		}
 		if wl, err := c.workloadFromPod(ctx, p); err == nil && wl != nil {
 			dp.Workload = wl
+			// Argo tracks the workload, not the pod — read the grouping (and
+			// override annotations) from there too so app manifests need nothing.
+			labels, anns, err := c.workloadMeta(ctx, wl)
+			if err == nil {
+				if dp.AppGroup == "" {
+					dp.AppGroup = appGroupOf(labels, anns)
+				}
+				if dp.RestoreCommand == "" {
+					dp.RestoreCommand = anns[AnnRestoreCommand]
+				}
+				if dp.QuiesceRaw == "" {
+					dp.QuiesceRaw = anns[AnnQuiesceWorkloads]
+				}
+			}
 		}
 		out = append(out, dp)
 	}
@@ -113,14 +143,19 @@ type ScalableWorkload struct {
 	Replicas int32 `json:"replicas"`
 }
 
-// QuiesceSet computes the workloads to stop while recovering db's application:
-// only that app — never the whole namespace (shared namespaces host unrelated
-// apps). Grouping is the pod's app.kubernetes.io/instance label (the Argo app
-// grouping), overridable via the k8up-btl.local/quiesce-workloads annotation.
+// QuiesceSet computes the workloads to stop while recovering db's application.
+// Resolution ladder — no app manifest edits required:
+//  1. k8up-btl.local/quiesce-workloads annotation (explicit git override)
+//  2. same Argo app as the DB (instance label or tracking-id, which Argo
+//     applies to workloads at deploy time)
+//  3. everything in the DB's namespace — right for namespace-per-app layouts;
+//     shared-namespace users see the exact stop-list in the dialog and can
+//     scope it with the annotation
+//
 // The DB's own workload is always excluded — it must stay up to receive the
-// dump on stdin.
-func (c *Clients) QuiesceSet(ctx context.Context, db *DBPod) ([]ScalableWorkload, error) {
-	var out []ScalableWorkload
+// dump on stdin. The returned grouping string says which rung applied.
+func (c *Clients) QuiesceSet(ctx context.Context, db *DBPod) ([]ScalableWorkload, string, error) {
+	out := []ScalableWorkload{}
 	seen := map[string]bool{}
 	exclude := ""
 	if db.Workload != nil {
@@ -140,30 +175,37 @@ func (c *Clients) QuiesceSet(ctx context.Context, db *DBPod) ([]ScalableWorkload
 		for _, entry := range strings.Split(raw, ",") {
 			kind, name, ok := strings.Cut(strings.TrimSpace(entry), "/")
 			if !ok || name == "" {
-				return nil, fmt.Errorf("invalid %s entry %q (want kind/name)", AnnQuiesceWorkloads, entry)
+				return nil, "", fmt.Errorf("invalid %s entry %q (want kind/name)", AnnQuiesceWorkloads, entry)
 			}
 			w, err := c.scalableWorkload(ctx, db.Namespace, kind, name)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			add(*w)
 		}
-		return out, nil
-	}
-
-	if db.Instance == "" {
-		// No grouping available; callers surface this so the operator can add
-		// the annotation. PVC-restore owners still get stopped independently.
-		return nil, nil
+		return out, "annotation", nil
 	}
 
 	deps, err := c.Typed.AppsV1().Deployments(db.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	stss, err := c.Typed.AppsV1().StatefulSets(db.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, "", err
+	}
+
+	match := func(labels, anns map[string]string) bool { return true }
+	grouping := "namespace"
+	if db.AppGroup != "" {
+		grouping = "argo-app:" + db.AppGroup
+		match = func(labels, anns map[string]string) bool {
+			return appGroupOf(labels, anns) == db.AppGroup
+		}
 	}
 	for i := range deps.Items {
 		d := &deps.Items[i]
-		if d.Labels["app.kubernetes.io/instance"] != db.Instance {
+		if !match(d.Labels, d.Annotations) {
 			continue
 		}
 		reps := int32(1)
@@ -172,13 +214,9 @@ func (c *Clients) QuiesceSet(ctx context.Context, db *DBPod) ([]ScalableWorkload
 		}
 		add(ScalableWorkload{WorkloadRef{Kind: "Deployment", Namespace: d.Namespace, Name: d.Name}, reps})
 	}
-	stss, err := c.Typed.AppsV1().StatefulSets(db.Namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
 	for i := range stss.Items {
 		s := &stss.Items[i]
-		if s.Labels["app.kubernetes.io/instance"] != db.Instance {
+		if !match(s.Labels, s.Annotations) {
 			continue
 		}
 		reps := int32(1)
@@ -187,7 +225,7 @@ func (c *Clients) QuiesceSet(ctx context.Context, db *DBPod) ([]ScalableWorkload
 		}
 		add(ScalableWorkload{WorkloadRef{Kind: "StatefulSet", Namespace: s.Namespace, Name: s.Name}, reps})
 	}
-	return out, nil
+	return out, grouping, nil
 }
 
 func (c *Clients) scalableWorkload(ctx context.Context, ns, kind, name string) (*ScalableWorkload, error) {

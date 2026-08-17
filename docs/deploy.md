@@ -124,10 +124,21 @@ always shows the exact command and where it came from before you confirm. Set
 `SQL_RESTORE_REQUIRE_ANNOTATION=true` to disable both fallbacks and require
 the per-pod annotation everywhere.
 
-During recovery only the app's own workloads are stopped (grouped by
-`app.kubernetes.io/instance`, override with
-`k8up-btl.local/quiesce-workloads`); other apps sharing the namespace keep
-running, and the DB pod stays up to receive the pipe.
+During recovery the app's writers are stopped while the DB pod stays up to
+receive the pipe. The stop-set also needs no manifest edits — resolution:
+
+1. `k8up-btl.local/quiesce-workloads` annotation (explicit `kind/name` list)
+2. workloads in the **same Argo app** as the DB — detected from the
+   `app.kubernetes.io/instance` label or `argocd.argoproj.io/tracking-id`
+   annotation that Argo applies to workloads at deploy time
+3. **everything in the DB's namespace** (minus the DB workload) — correct for
+   namespace-per-app layouts; if a namespace hosts several apps and no Argo
+   grouping is found, the dialog warns and the annotation scopes it
+
+The confirm dialog always lists the exact workloads that will stop, and which
+rung of the ladder chose them. Both `k8up-btl.local/*` annotations are read
+from the pod **or its owner workload's metadata** — putting them on the
+Deployment/StatefulSet object avoids a pod restart when adding them.
 
 Per-app annotation example (only needed when the derived command is wrong):
 

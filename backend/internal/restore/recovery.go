@@ -289,14 +289,15 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 	// itself stays up to receive the dump.
 	st.Step = StepQuiescing
 	o.set(st)
-	quiesce, err := o.Clients.QuiesceSet(runCtx, db)
+	quiesce, grouping, err := o.Clients.QuiesceSet(runCtx, db)
 	if err != nil {
 		runErr = fmt.Errorf("compute quiesce set: %w", err)
 		return
 	}
 	quiesce = o.addPVCOwners(runCtx, quiesce, st.PVCParts, db)
+	o.emitLog(st.RestoreID, fmt.Sprintf("quiesce grouping: %s (%d workload(s) to stop)", grouping, len(quiesce)))
 	if len(quiesce) == 0 {
-		o.emitLog(st.RestoreID, fmt.Sprintf("WARNING: no app workloads identified to stop (no app.kubernetes.io/instance label and no %s annotation) — the database may receive writes during recovery", k8s.AnnQuiesceWorkloads))
+		o.emitLog(st.RestoreID, "WARNING: no workloads to stop — the database may receive writes during recovery")
 	}
 	for _, w := range quiesce {
 		wl := w.WorkloadRef

@@ -59,12 +59,13 @@ export type RecoveryDBCandidate = {
   podName: string
   container: string
   workload?: WorkloadRef
-  instance?: string
+  appGroup?: string
   backupCommand: string
   restoreCommand?: string
   commandSource?: string
   commandError?: string
   workloadsToStop: ScalableWorkload[]
+  quiesceGrouping?: string
   quiesceWarning?: string
   hasRestoreCommand: boolean
 }

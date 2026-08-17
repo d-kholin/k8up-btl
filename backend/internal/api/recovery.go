@@ -25,14 +25,16 @@ type recoveryDBCandidate struct {
 	PodName           string                 `json:"podName"`
 	Container         string                 `json:"container"`
 	Workload          *k8s.WorkloadRef       `json:"workload,omitempty"`
-	Instance          string                 `json:"instance,omitempty"`
+	AppGroup          string                 `json:"appGroup,omitempty"`
 	BackupCommand     string                 `json:"backupCommand"`
 	RestoreCommand    string                 `json:"restoreCommand,omitempty"`
 	CommandSource     string                 `json:"commandSource,omitempty"`
 	CommandError      string                 `json:"commandError,omitempty"`
 	WorkloadsToStop   []k8s.ScalableWorkload `json:"workloadsToStop"`
-	QuiesceWarning    string                 `json:"quiesceWarning,omitempty"`
-	HasRestoreCommand bool                   `json:"hasRestoreCommand"`
+	// QuiesceGrouping: annotation | argo-app:<name> | namespace
+	QuiesceGrouping string `json:"quiesceGrouping,omitempty"`
+	QuiesceWarning  string `json:"quiesceWarning,omitempty"`
+	HasRestoreCommand bool `json:"hasRestoreCommand"`
 }
 
 type recoveryPVCOption struct {
@@ -78,7 +80,7 @@ func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
 			PodName:         p.PodName,
 			Container:       p.Container,
 			Workload:        p.Workload,
-			Instance:        p.Instance,
+			AppGroup:        p.AppGroup,
 			BackupCommand:   p.BackupCommand,
 			WorkloadsToStop: []k8s.ScalableWorkload{},
 		}
@@ -89,12 +91,13 @@ func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
 		} else {
 			c.CommandError = err.Error()
 		}
-		if set, err := s.K8s.QuiesceSet(ctx, &p); err == nil {
+		if set, grouping, err := s.K8s.QuiesceSet(ctx, &p); err == nil {
 			if set != nil {
 				c.WorkloadsToStop = set
 			}
-			if len(set) == 0 {
-				c.QuiesceWarning = "no app workloads identified: pod has no app.kubernetes.io/instance label and no " + k8s.AnnQuiesceWorkloads + " annotation"
+			c.QuiesceGrouping = grouping
+			if grouping == "namespace" && len(set) > 0 {
+				c.QuiesceWarning = "no Argo app grouping found — ALL other workloads in namespace " + ns + " will be stopped; scope with the " + k8s.AnnQuiesceWorkloads + " annotation if this namespace hosts multiple apps"
 			}
 		} else {
 			c.QuiesceWarning = err.Error()
@@ -126,7 +129,7 @@ func bestDBPodGuess(dumpPath string, candidates []recoveryDBCandidate) string {
 	bestScore := 0
 	best := ""
 	for _, c := range candidates {
-		names := []string{c.PodName, c.Instance}
+		names := []string{c.PodName, c.AppGroup}
 		if c.Workload != nil {
 			names = append(names, c.Workload.Name)
 		}

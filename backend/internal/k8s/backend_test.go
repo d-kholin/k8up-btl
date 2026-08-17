@@ -41,3 +41,15 @@ func TestSTSTemplateOwnsPVC(t *testing.T) {
 		}
 	}
 }
+
+func TestAppGroupOf(t *testing.T) {
+	if got := appGroupOf(map[string]string{"app.kubernetes.io/instance": "mealie"}, nil); got != "mealie" {
+		t.Fatalf("label tracking: got %q", got)
+	}
+	if got := appGroupOf(nil, map[string]string{"argocd.argoproj.io/tracking-id": "mealie:apps/Deployment:mealie/postgres"}); got != "mealie" {
+		t.Fatalf("annotation tracking: got %q", got)
+	}
+	if got := appGroupOf(map[string]string{"app": "postgres"}, map[string]string{}); got != "" {
+		t.Fatalf("no tracking: got %q", got)
+	}
+}
