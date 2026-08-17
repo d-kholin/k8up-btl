@@ -13,15 +13,15 @@ Runtime image: **`ghcr.io/d-kholin/k8up-btl`** (built by GitHub Actions from thi
 
 ```bash
 kubectl apply -k deploy/k8s
-kubectl -n k8up-gui rollout status deploy/k8up-gui
+kubectl -n k8up-btl rollout status deploy/k8up-btl
 ```
 
 Creates:
 
-- Namespace `k8up-gui`
+- Namespace `k8up-btl`
 - SA + ClusterRole/Binding (K8up CRDs, scale workloads, Argo Applications, secrets)
-- PVC `k8up-gui-data` (SQLite audit only)
-- Deployment + Service `k8up-gui` (**ClusterIP port 80 → 8080**)
+- PVC `k8up-btl-data` (SQLite audit only)
+- Deployment + Service `k8up-btl` (**ClusterIP port 80 → 8080**)
 - NetworkPolicies: default-deny ingress, allow from `newt` only
 
 No app-binary PVC and no seed pod. The container image holds `server`, SPA, and `restic`.
@@ -51,7 +51,7 @@ Package is intended **public** (`ghcr.io/d-kholin/k8up-btl`). No pull secret.
 If a private package remains, create once:
 
 ```bash
-kubectl -n k8up-gui create secret docker-registry ghcr-pull \
+kubectl -n k8up-btl create secret docker-registry ghcr-pull \
   --docker-server=ghcr.io \
   --docker-username=d-kholin \
   --docker-password=GITHUB_PAT_WITH_READ_PACKAGES
@@ -85,7 +85,7 @@ docker push ghcr.io/d-kholin/k8up-btl:dev
 | Field | Value |
 |-------|--------|
 | Method / scheme | **http** |
-| Hostname | `k8up-gui.k8up-gui.svc` or `k8up-gui.k8up-gui.svc.cluster.local` |
+| Hostname | `k8up-btl.k8up-btl.svc` or `k8up-btl.k8up-btl.svc.cluster.local` |
 | Port | **80** |
 | Public hostname | e.g. `k8up.your.domain` |
 | Auth | Pangolin resource protection only |
@@ -101,27 +101,61 @@ The API never returns 401 for missing identity. Audit rows use
 ## Verify
 
 ```bash
-kubectl -n k8up-gui get deploy,svc,pvc
-kubectl -n k8up-gui get pods -o wide
-kubectl -n newt exec deploy/newt-site-a -- wget -q -O- -T 5 http://k8up-gui.k8up-gui.svc/healthz
-kubectl -n k8up-gui port-forward svc/k8up-gui 8080:80
+kubectl -n k8up-btl get deploy,svc,pvc
+kubectl -n k8up-btl get pods -o wide
+kubectl -n newt exec deploy/newt-site-a -- wget -q -O- -T 5 http://k8up-btl.k8up-btl.svc/healthz
+kubectl -n k8up-btl port-forward svc/k8up-btl 8080:80
 # curl http://127.0.0.1:8080/api/v1/schedules
+```
+
+## Migrating from `k8up-gui` names
+
+Cluster resources were previously namespaced as `k8up-gui`. After GitOps
+switches to `k8up-btl`, copy the audit SQLite and retarget Pangolin:
+
+```bash
+# After Argo has created ns/deploy/pvc k8up-btl and k8up-btl-data is Bound:
+kubectl -n k8up-btl scale deploy/k8up-btl --replicas=0
+kubectl -n k8up-gui scale deploy/k8up-gui --replicas=0 --ignore-not-found
+
+# Temporary mount pods (one per namespace — PVCs are not cross-namespace)
+kubectl -n k8up-gui run k8up-old-data --restart=Never --image=busybox:1.36 \
+  --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:1.36","command":["sleep","3600"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"k8up-gui-data"}}],"securityContext":{"fsGroup":65532}}}'
+kubectl -n k8up-btl run k8up-new-data --restart=Never --image=busybox:1.36 \
+  --overrides='{"spec":{"containers":[{"name":"c","image":"busybox:1.36","command":["sleep","3600"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}],"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"k8up-btl-data"}}],"securityContext":{"fsGroup":65532}}}'
+kubectl -n k8up-gui wait --for=condition=Ready pod/k8up-old-data --timeout=60s
+kubectl -n k8up-btl wait --for=condition=Ready pod/k8up-new-data --timeout=60s
+
+kubectl -n k8up-gui cp k8up-old-data:/data/. /tmp/k8up-btl-data-migrate/
+kubectl -n k8up-btl cp /tmp/k8up-btl-data-migrate/. k8up-new-data:/data/
+rm -rf /tmp/k8up-btl-data-migrate
+
+kubectl -n k8up-gui delete pod k8up-old-data --wait=false
+kubectl -n k8up-btl delete pod k8up-new-data --wait=false
+
+# If image is still private, copy pull secret into the new namespace:
+# kubectl get secret ghcr-pull -n k8up-gui -o yaml | sed 's/namespace: k8up-gui/namespace: k8up-btl/' | kubectl apply -f -
+
+kubectl -n k8up-btl scale deploy/k8up-btl --replicas=1
+kubectl -n k8up-btl rollout status deploy/k8up-btl
+# Pangolin backend host → k8up-btl.k8up-btl.svc:80
+# After verify: delete Application leftovers / ns k8up-gui (and orphan PVC).
 ```
 
 ## Migrating off the old PVC-seeded deploy
 
-If you previously used `k8up-gui-app` + seed pod:
+If you previously used `k8up-gui-app` + seed pod (legacy):
 
 ```bash
-kubectl -n k8up-gui scale deploy/k8up-gui --replicas=0
+kubectl -n k8up-btl scale deploy/k8up-btl --replicas=0
 kubectl apply -k deploy/k8s
 # optional cleanup once the new pod is healthy:
 kubectl -n k8up-gui delete pvc k8up-gui-app --ignore-not-found
 kubectl -n k8up-gui delete pod k8up-gui-seed --ignore-not-found
-kubectl -n k8up-gui rollout status deploy/k8up-gui
+kubectl -n k8up-btl rollout status deploy/k8up-btl
 ```
 
-Keep **`k8up-gui-data`** — that is the audit SQLite volume.
+Keep the **data** PVC (`k8up-btl-data`) — that is the audit SQLite volume.
 
 ## Notes
 

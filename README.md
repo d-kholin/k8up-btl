@@ -1,7 +1,7 @@
 # k8up btl (ketchup bottle)
 
 Web GUI for [K8up](https://k8up.io/) backup visibility and **Argo CD-aware** one-click restores.
-Formerly referred to as k8up-gui; product name is **k8up btl**.
+Formerly referred to as k8up-gui; product name is **k8up btl**. Cluster resources use the `k8up-btl` name.
 
 **Status:** greenfield scaffold (v0). Core restore orchestration, API surface, UI shell, and in-cluster manifests are in place; live cluster wiring and Prometheus metric names still need validation (see open questions in the PRD).
 
@@ -98,15 +98,15 @@ Manifests under `deploy/k8s/` assume:
 
 - Single cluster, cluster-scoped RBAC for K8up CRDs
 - Argo CD Applications in `argocd`
-- PVC for SQLite audit DB only (`k8up-gui-data`)
+- PVC for SQLite audit DB only (`k8up-btl-data`)
 - Nodes can pull the GHCR image (public package, or pull secret if private)
 
 ```bash
 kubectl apply -k deploy/k8s
-kubectl -n k8up-gui rollout status deploy/k8up-gui
+kubectl -n k8up-btl rollout status deploy/k8up-btl
 ```
 
-Wire the Service behind Pangolin/Newt (ClusterIP `k8up-gui.k8up-gui.svc:80`). Full steps, pin tags/digests, and migration off the old PVC-seed path: [`docs/deploy.md`](docs/deploy.md).
+Wire the Service behind Pangolin/Newt (ClusterIP `k8up-btl.k8up-btl.svc:80`). Full steps, pin tags/digests, and migration off the old PVC-seed path: [`docs/deploy.md`](docs/deploy.md).
 
 Do **not** GitOps-track transient Restore CRs this app creates.
 

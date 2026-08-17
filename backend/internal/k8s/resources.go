@@ -382,7 +382,7 @@ func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshot
                                 "name":      name,
                                 "namespace": namespace,
                                 "labels": map[string]any{
-                                        "app.kubernetes.io/managed-by": "k8up-gui",
+                                        "app.kubernetes.io/managed-by": "k8up-btl",
                                         "restore-gui.local/one-shot":   "true",
                                 },
                         },
@@ -457,7 +457,7 @@ func (c *Clients) CreateSimpleJobCR(ctx context.Context, gvr schema.GroupVersion
                                 "name":      name,
                                 "namespace": namespace,
                                 "labels": map[string]any{
-                                        "app.kubernetes.io/managed-by": "k8up-gui",
+                                        "app.kubernetes.io/managed-by": "k8up-btl",
                                         "restore-gui.local/one-shot":   "true",
                                 },
                         },
