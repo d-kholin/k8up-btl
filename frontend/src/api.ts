@@ -62,7 +62,8 @@ export type RecoveryDBCandidate = {
   instance?: string
   backupCommand: string
   restoreCommand?: string
-  suggestedCommand?: string
+  commandSource?: string
+  commandError?: string
   workloadsToStop: ScalableWorkload[]
   quiesceWarning?: string
   hasRestoreCommand: boolean

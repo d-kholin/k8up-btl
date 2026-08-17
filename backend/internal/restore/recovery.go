@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -44,22 +45,71 @@ func DumpFilePath(paths []string) string {
 	return ""
 }
 
-// SuggestRestoreCommand proposes a k8up-btl.local/restore-command value from
-// the pod's K8up backup command. Suggestion only — recovery never runs an
-// inferred command; the annotation must exist in git.
-func SuggestRestoreCommand(backupCommand string) string {
+// DetectEngine identifies the database engine from a K8up backup command.
+func DetectEngine(backupCommand string) string {
 	switch {
 	case strings.Contains(backupCommand, "pg_dumpall"):
-		return `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" postgres`
+		return "postgres-all"
 	case strings.Contains(backupCommand, "pg_dump"):
-		return `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"`
+		return "postgres"
 	case strings.Contains(backupCommand, "mariadb-dump"):
-		return `mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"`
+		return "mariadb"
 	case strings.Contains(backupCommand, "mysqldump"):
-		return `mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"`
+		return "mysql"
 	default:
 		return ""
 	}
+}
+
+var trailingQuotesRe = regexp.MustCompile(`['"\s]*$`)
+
+// DeriveRestoreCommand inverts a K8up backup command so most workloads need no
+// per-app annotation. For postgres the env-assignment prefix (PGDATABASE=…,
+// PGUSER=…, PGPASSWORD=…) is preserved verbatim — psql reads the same PG* env
+// vars pg_dump does — and the dump invocation (with its dump-only flags) is
+// replaced by psql. For mariadb/mysql the dump binary is swapped for the
+// client and dump-only flags are stripped, keeping -u/-p/-h flags and the
+// database argument. Returns "" when the command can't be inverted safely.
+func DeriveRestoreCommand(backupCommand string) string {
+	switch DetectEngine(backupCommand) {
+	case "postgres-all":
+		return replaceDumpInvocation(backupCommand, "pg_dumpall", "psql -v ON_ERROR_STOP=1 -d postgres")
+	case "postgres":
+		return replaceDumpInvocation(backupCommand, "pg_dump", "psql -v ON_ERROR_STOP=1")
+	case "mariadb":
+		return deriveMySQLRestore(backupCommand, "mariadb-dump", "mariadb")
+	case "mysql":
+		return deriveMySQLRestore(backupCommand, "mysqldump", "mysql")
+	default:
+		return ""
+	}
+}
+
+// replaceDumpInvocation keeps everything before the dump binary (sh -c wrapper
+// and env assignments) plus any trailing shell quotes, dropping the dump's own
+// arguments — they are dump-only flags like --clean.
+func replaceDumpInvocation(cmd, dumpBin, client string) string {
+	idx := strings.Index(cmd, dumpBin)
+	if idx < 0 {
+		return ""
+	}
+	return cmd[:idx] + client + trailingQuotesRe.FindString(cmd)
+}
+
+// deriveMySQLRestore swaps the dump binary for the client and strips flags the
+// client does not accept; connection flags (-u/-p/-h/-P) and the positional
+// database name carry over unchanged.
+func deriveMySQLRestore(cmd, dumpBin, client string) string {
+	out := strings.Replace(cmd, dumpBin, client, 1)
+	for _, flag := range []string{
+		"--databases", "--all-databases", "--single-transaction", "--quick",
+		"--routines", "--triggers", "--events", "--add-drop-table",
+		"--add-drop-database", "--skip-lock-tables", "--lock-tables=false",
+		"--no-tablespaces", "--opt",
+	} {
+		out = strings.ReplaceAll(out, " "+flag, "")
+	}
+	return out
 }
 
 // StartRecovery validates and begins an async SQL dump recovery.
@@ -91,17 +141,15 @@ func (o *Orchestrator) StartRecovery(ctx context.Context, req RecoveryRequest) (
 	}
 	dumpID := snapshotID(snap.Object, req.DumpSnapshotName)
 
-	// The restore command must be declared in git on the live DB pod.
+	// Resolve the restore command from git-managed sources only (annotation →
+	// app env config → derived from the backupcommand annotation).
 	db, err := o.Clients.GetBackupCommandPod(ctx, req.Namespace, req.DBPodName)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(db.RestoreCommand) == "" {
-		msg := fmt.Sprintf("pod %s/%s has no %s annotation; recovery only runs commands declared in git", req.Namespace, db.PodName, k8s.AnnRestoreCommand)
-		if sugg := SuggestRestoreCommand(db.BackupCommand); sugg != "" {
-			msg += fmt.Sprintf(" (suggested value: %s)", sugg)
-		}
-		return nil, fmt.Errorf("%s", msg)
+	restoreCmd, cmdSource, err := o.ResolveRestoreCommand(db)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate additional PVC restores under the same source-lock rule as
@@ -140,11 +188,12 @@ func (o *Orchestrator) StartRecovery(ctx context.Context, req RecoveryRequest) (
 		SnapshotCR:        req.DumpSnapshotName,
 		SnapshotNamespace: req.Namespace,
 		PVCNamespace:      req.Namespace,
-		DBPod:             db.PodName,
-		DBContainer:       db.Container,
-		DBWorkload:        db.Workload,
-		RestoreCommand:    db.RestoreCommand,
-		DumpPath:          dumpPath,
+		DBPod:                db.PodName,
+		DBContainer:          db.Container,
+		DBWorkload:           db.Workload,
+		RestoreCommand:       restoreCmd,
+		RestoreCommandSource: cmdSource,
+		DumpPath:             dumpPath,
 		PVCParts:          parts,
 		StartedAt:         time.Now().UTC(),
 		Actor:             req.Actor,
@@ -353,6 +402,30 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 	// 7. Resume Argo controller — finalize (via defer).
 }
 
+// ResolveRestoreCommand picks the command a recovery will pipe the dump into.
+// Every source is git-managed: the pod annotation, the app's env config
+// (SQL_RESTORE_CMD_*), or a derivation of the K8up backupcommand annotation.
+// A command from the request body is never accepted.
+func (o *Orchestrator) ResolveRestoreCommand(db *k8s.DBPod) (cmd, source string, err error) {
+	if c := strings.TrimSpace(db.RestoreCommand); c != "" {
+		return c, "annotation", nil
+	}
+	if o.RequireRestoreAnnotation {
+		return "", "", fmt.Errorf("pod %s/%s has no %s annotation and SQL_RESTORE_REQUIRE_ANNOTATION is set", db.Namespace, db.PodName, k8s.AnnRestoreCommand)
+	}
+	engine := DetectEngine(db.BackupCommand)
+	if engine == "" {
+		return "", "", fmt.Errorf("cannot detect a database engine from the backup command on pod %s/%s; add the %s annotation", db.Namespace, db.PodName, k8s.AnnRestoreCommand)
+	}
+	if c := strings.TrimSpace(o.RestoreCommandOverrides[engine]); c != "" {
+		return c, "config (" + engine + ")", nil
+	}
+	if c := DeriveRestoreCommand(db.BackupCommand); c != "" {
+		return c, "derived (" + engine + ")", nil
+	}
+	return "", "", fmt.Errorf("could not derive a restore command from the backup command on pod %s/%s; add the %s annotation", db.Namespace, db.PodName, k8s.AnnRestoreCommand)
+}
+
 // addPVCOwners extends the quiesce set with owners of PVCs being restored
 // (their pods must release the volume) — skipping the DB's own workload.
 func (o *Orchestrator) addPVCOwners(ctx context.Context, set []k8s.ScalableWorkload, parts []PVCRestorePart, db *k8s.DBPod) []k8s.ScalableWorkload {
@@ -395,7 +468,7 @@ func (o *Orchestrator) pipeDumpToPod(ctx context.Context, st *State, db *k8s.DBP
 	}()
 
 	execErr := o.Clients.ExecStdin(ctx, st.PVCNamespace, db.PodName, db.Container,
-		[]string{"/bin/sh", "-c", db.RestoreCommand}, counter,
+		[]string{"/bin/sh", "-c", st.RestoreCommand}, counter,
 		func(line string) { o.emitLog(st.RestoreID, line) })
 	// Unblock the dump goroutine if exec bailed before draining stdin.
 	_ = pr.CloseWithError(fmt.Errorf("exec finished"))

@@ -52,6 +52,8 @@ func main() {
 
 	// Orchestrator tolerates nil clients for local UI/API smoke without kubeconfig.
 	orch := restore.NewOrchestrator(clients, cfg.ArgoCDNamespace, cfg.ScaleDownTimeout, cfg.RestoreTimeout, store, log)
+	orch.RestoreCommandOverrides = cfg.SQLRestoreOverrides()
+	orch.RequireRestoreAnnotation = cfg.SQLRestoreRequireAnnotation
 	// Hydrate completed/historical restore jobs from SQLite on the data PVC.
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

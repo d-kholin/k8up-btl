@@ -140,26 +140,34 @@ export default function RecoveryDialog({
             {db && (
               <>
                 <div className="grid gap-1.5">
-                  <label className="text-xs text-muted-foreground">Restore command (from git)</label>
+                  <label className="text-xs text-muted-foreground">
+                    Restore command
+                    {db.commandSource ? (
+                      <span className="ml-1 opacity-70">— source: {db.commandSource}</span>
+                    ) : null}
+                  </label>
                   {db.hasRestoreCommand ? (
-                    <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs">
-                      {db.podName} ({db.container}): sh -c "{db.restoreCommand}"
-                    </div>
+                    <>
+                      <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs">
+                        {db.podName} ({db.container}): sh -c "{db.restoreCommand}"
+                      </div>
+                      {db.commandSource?.startsWith('derived') && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Derived from the pod's k8up.io/backupcommand (dump swapped for the
+                          client, env assignments kept). Pin a different command with the{' '}
+                          <code className="font-mono">k8up-btl.local/restore-command</code>{' '}
+                          annotation.
+                        </p>
+                      )}
+                    </>
                   ) : (
                     <Alert variant="danger">
-                      <div className="space-y-2 text-xs">
+                      <div className="space-y-1 text-xs">
+                        <p>{db.commandError || 'No restore command could be resolved.'}</p>
                         <p>
-                          Pod <span className="font-mono">{db.podName}</span> has no{' '}
-                          <code className="font-mono">k8up-btl.local/restore-command</code>{' '}
-                          annotation. Recovery only runs commands declared in git — add the
-                          annotation to the workload's pod template
-                          {db.suggestedCommand ? ', e.g.:' : '.'}
+                          Add <code className="font-mono">k8up-btl.local/restore-command</code>{' '}
+                          to the workload's pod template in git.
                         </p>
-                        {db.suggestedCommand && (
-                          <pre className="overflow-x-auto rounded bg-black/20 p-2 font-mono">
-                            {`k8up-btl.local/restore-command: '${db.suggestedCommand}'`}
-                          </pre>
-                        )}
                       </div>
                     </Alert>
                   )}

@@ -102,33 +102,46 @@ The API never returns 401 for missing identity. Audit rows use
 
 K8up takes application-level dumps via the `k8up.io/backupcommand` pod
 annotation. K8up has no inverse operation, so k8up btl restores them itself:
-it pipes `restic dump <snapshot> <file.sql>` into the DB pod over `pods/exec`,
-running a restore command that **must be declared in git** — the GUI never
-accepts a free-text command. During recovery only the app's own workloads are
-stopped (grouped by `app.kubernetes.io/instance`); other apps sharing the
-namespace keep running, and the DB pod stays up to receive the pipe.
+it pipes `restic dump <snapshot> <file.sql>` into the DB pod over `pods/exec`.
+The command it runs is always git-sourced — never free text from the browser —
+resolved in this order:
 
-Add the annotation to the DB workload's **pod template**, next to the K8up
-backup annotations. It runs via `sh -c` in the backup container, so the pod's
-own env vars (credentials) are available:
+1. **Pod annotation** `k8up-btl.local/restore-command` (per-app override)
+2. **App env config** `SQL_RESTORE_CMD_<ENGINE>` on the k8up-btl deployment
+   (`SQL_RESTORE_CMD_POSTGRES`, `_POSTGRES_ALL`, `_MARIADB`, `_MYSQL`)
+3. **Derived from the backupcommand itself** (default, zero-config): the dump
+   invocation is swapped for the matching client and dump-only flags dropped,
+   keeping the command's env assignments — e.g.
+   `sh -c 'PGDATABASE="$POSTGRES_USER" PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean'`
+   becomes
+   `sh -c 'PGDATABASE=… PGUSER=… PGPASSWORD=… psql -v ON_ERROR_STOP=1'`
+   (psql reads the same `PG*` env vars pg_dump does). mariadb-dump → mariadb
+   and mysqldump → mysql work the same way, keeping `-u`/`-p` flags and the
+   database argument.
+
+Most workloads therefore need **no annotation at all**. The recovery dialog
+always shows the exact command and where it came from before you confirm. Set
+`SQL_RESTORE_REQUIRE_ANNOTATION=true` to disable both fallbacks and require
+the per-pod annotation everywhere.
+
+During recovery only the app's own workloads are stopped (grouped by
+`app.kubernetes.io/instance`, override with
+`k8up-btl.local/quiesce-workloads`); other apps sharing the namespace keep
+running, and the DB pod stays up to receive the pipe.
+
+Per-app annotation example (only needed when the derived command is wrong):
 
 ```yaml
-# PostgreSQL (pair with pg_dump --clean --if-exists in the backupcommand so
-# restores into a non-empty DB replace objects instead of colliding)
-k8up.io/backupcommand: sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"'
+# in the DB workload's pod template, next to the K8up annotations; runs via
+# `sh -c` in the backup container so the pod's env (credentials) is available
+k8up.io/backupcommand: sh -c 'PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists mydb'
 k8up.io/file-extension: .sql
-k8up-btl.local/restore-command: psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-
-# MariaDB
-k8up.io/backupcommand: sh -c 'mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" --databases "$MARIADB_DATABASE"'
-k8up.io/file-extension: .sql
-k8up-btl.local/restore-command: mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"
-
-# MySQL
-k8up.io/backupcommand: sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --databases "$MYSQL_DATABASE"'
-k8up.io/file-extension: .sql
-k8up-btl.local/restore-command: mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
+k8up-btl.local/restore-command: psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d mydb
 ```
+
+**Dump flags matter:** use `pg_dump --clean --if-exists` so restores into a
+non-empty database drop-and-recreate objects instead of colliding
+(mariadb-dump/mysqldump emit `DROP TABLE IF EXISTS` by default).
 
 Optional — override which workloads are stopped during recovery (defaults to
 everything sharing the pod's `app.kubernetes.io/instance` label, excluding the

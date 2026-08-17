@@ -39,17 +39,36 @@ func TestDumpFilePath(t *testing.T) {
 	}
 }
 
-func TestSuggestRestoreCommand(t *testing.T) {
+func TestDetectEngine(t *testing.T) {
 	cases := map[string]string{
-		`sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB'`: `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"`,
-		`pg_dumpall -U postgres`:            `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" postgres`,
-		`mariadb-dump -u root db`:           `mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"`,
-		`mysqldump --all-databases`:         `mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"`,
-		`tar czf - /data`:                   ``,
+		`sh -c 'pg_dump --clean'`:   "postgres",
+		`pg_dumpall -U postgres`:    "postgres-all",
+		`mariadb-dump -u root db`:   "mariadb",
+		`mysqldump --all-databases`: "mysql",
+		`tar czf - /data`:           "",
 	}
 	for in, want := range cases {
-		if got := SuggestRestoreCommand(in); got != want {
-			t.Errorf("SuggestRestoreCommand(%q) = %q, want %q", in, got, want)
+		if got := DetectEngine(in); got != want {
+			t.Errorf("DetectEngine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDeriveRestoreCommand(t *testing.T) {
+	cases := map[string]string{
+		// Real homelab annotations: env-assignment prefix must be preserved
+		// verbatim (psql reads the same PG* vars pg_dump does).
+		`sh -c 'PGDATABASE="$POSTGRES_USER" PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean'`:   `sh -c 'PGDATABASE="$POSTGRES_USER" PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1'`,
+		`sh -c 'PGDATABASE=dawarich_development PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean'`: `sh -c 'PGDATABASE=dawarich_development PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1'`,
+		`sh -c 'PGUSER=postgres pg_dumpall --clean'`: `sh -c 'PGUSER=postgres psql -v ON_ERROR_STOP=1 -d postgres'`,
+		// mariadb/mysql: binary swap, dump-only flags stripped, creds + db kept.
+		`sh -c 'mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" --single-transaction "$MARIADB_DATABASE"'`: `sh -c 'mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"'`,
+		`mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --databases app`:                                             `mysql -uroot -p"$MYSQL_ROOT_PASSWORD" app`,
+		`tar czf - /data`: ``,
+	}
+	for in, want := range cases {
+		if got := DeriveRestoreCommand(in); got != want {
+			t.Errorf("DeriveRestoreCommand(%q)\n  got  %q\n  want %q", in, got, want)
 		}
 	}
 }

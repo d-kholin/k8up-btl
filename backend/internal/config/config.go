@@ -52,6 +52,26 @@ type Config struct {
         // NotifyRestoreSuccess also alerts on successful GUI restores (failures
         // and interrupted restores always alert when a channel is configured).
         NotifyRestoreSuccess bool
+
+        // SQL dump recovery. Restore command resolution: pod annotation →
+        // SQL_RESTORE_CMD_<engine> → derived from the K8up backupcommand.
+        // SQLRestoreRequireAnnotation disables both fallbacks.
+        SQLRestoreCmdPostgres       string
+        SQLRestoreCmdPostgresAll    string
+        SQLRestoreCmdMariaDB        string
+        SQLRestoreCmdMySQL          string
+        SQLRestoreRequireAnnotation bool
+}
+
+// SQLRestoreOverrides maps engine → configured restore command (empty entries
+// mean "no override").
+func (c Config) SQLRestoreOverrides() map[string]string {
+        return map[string]string{
+                "postgres":     c.SQLRestoreCmdPostgres,
+                "postgres-all": c.SQLRestoreCmdPostgresAll,
+                "mariadb":      c.SQLRestoreCmdMariaDB,
+                "mysql":        c.SQLRestoreCmdMySQL,
+        }
 }
 
 func Load() Config {
@@ -88,6 +108,12 @@ func Load() Config {
                 SMTPFrom:             os.Getenv("SMTP_FROM"),
                 SMTPTo:               splitCSV(os.Getenv("SMTP_TO")),
                 NotifyRestoreSuccess: boolEnv("NOTIFY_RESTORE_SUCCESS", true),
+
+                SQLRestoreCmdPostgres:       os.Getenv("SQL_RESTORE_CMD_POSTGRES"),
+                SQLRestoreCmdPostgresAll:    os.Getenv("SQL_RESTORE_CMD_POSTGRES_ALL"),
+                SQLRestoreCmdMariaDB:        os.Getenv("SQL_RESTORE_CMD_MARIADB"),
+                SQLRestoreCmdMySQL:          os.Getenv("SQL_RESTORE_CMD_MYSQL"),
+                SQLRestoreRequireAnnotation: boolEnv("SQL_RESTORE_REQUIRE_ANNOTATION", false),
         }
         if cfg.ResticCacheDir == "" {
                 cfg.ResticCacheDir = filepath.Join(filepath.Dir(cfg.AuditDBPath), "restic-cache")

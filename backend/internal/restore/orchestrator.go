@@ -75,8 +75,9 @@ type State struct {
 	DBPod            string                 `json:"dbPod,omitempty"`
 	DBContainer      string                 `json:"dbContainer,omitempty"`
 	DBWorkload       *k8s.WorkloadRef       `json:"dbWorkload,omitempty"`
-	RestoreCommand   string                 `json:"restoreCommand,omitempty"`
-	DumpPath         string                 `json:"dumpPath,omitempty"`
+	RestoreCommand       string             `json:"restoreCommand,omitempty"`
+	RestoreCommandSource string             `json:"restoreCommandSource,omitempty"`
+	DumpPath             string             `json:"dumpPath,omitempty"`
 	StoppedWorkloads []k8s.ScalableWorkload `json:"stoppedWorkloads,omitempty"`
 	PVCParts         []PVCRestorePart       `json:"pvcParts,omitempty"`
 	SafetyBackupCR   string                 `json:"safetyBackupCR,omitempty"`
@@ -118,6 +119,13 @@ type Orchestrator struct {
 	// DumpSnapshot streams one file out of a snapshot (wired by the API server;
 	// used by SQL recovery to pipe the dump into the DB pod).
 	DumpSnapshot func(ctx context.Context, snapNS, snapName, path string, w io.Writer) error
+	// RestoreCommandOverrides maps engine (postgres, postgres-all, mariadb,
+	// mysql) → restore command, from SQL_RESTORE_CMD_* env config. Sits between
+	// the pod annotation and the derived-from-backupcommand default.
+	RestoreCommandOverrides map[string]string
+	// RequireRestoreAnnotation disables env/derived fallbacks — recovery then
+	// only runs with an explicit k8up-btl.local/restore-command annotation.
+	RequireRestoreAnnotation bool
 
 	mu   sync.Mutex
 	jobs map[string]*State

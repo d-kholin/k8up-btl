@@ -22,16 +22,17 @@ import (
 // PVC snapshots for point-in-time), and the start endpoint.
 
 type recoveryDBCandidate struct {
-	PodName            string                 `json:"podName"`
-	Container          string                 `json:"container"`
-	Workload           *k8s.WorkloadRef       `json:"workload,omitempty"`
-	Instance           string                 `json:"instance,omitempty"`
-	BackupCommand      string                 `json:"backupCommand"`
-	RestoreCommand     string                 `json:"restoreCommand,omitempty"`
-	SuggestedCommand   string                 `json:"suggestedCommand,omitempty"`
-	WorkloadsToStop    []k8s.ScalableWorkload `json:"workloadsToStop"`
-	QuiesceWarning     string                 `json:"quiesceWarning,omitempty"`
-	HasRestoreCommand  bool                   `json:"hasRestoreCommand"`
+	PodName           string                 `json:"podName"`
+	Container         string                 `json:"container"`
+	Workload          *k8s.WorkloadRef       `json:"workload,omitempty"`
+	Instance          string                 `json:"instance,omitempty"`
+	BackupCommand     string                 `json:"backupCommand"`
+	RestoreCommand    string                 `json:"restoreCommand,omitempty"`
+	CommandSource     string                 `json:"commandSource,omitempty"`
+	CommandError      string                 `json:"commandError,omitempty"`
+	WorkloadsToStop   []k8s.ScalableWorkload `json:"workloadsToStop"`
+	QuiesceWarning    string                 `json:"quiesceWarning,omitempty"`
+	HasRestoreCommand bool                   `json:"hasRestoreCommand"`
 }
 
 type recoveryPVCOption struct {
@@ -74,17 +75,19 @@ func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
 	for i := range pods {
 		p := pods[i]
 		c := recoveryDBCandidate{
-			PodName:           p.PodName,
-			Container:         p.Container,
-			Workload:          p.Workload,
-			Instance:          p.Instance,
-			BackupCommand:     p.BackupCommand,
-			RestoreCommand:    p.RestoreCommand,
-			HasRestoreCommand: strings.TrimSpace(p.RestoreCommand) != "",
-			WorkloadsToStop:   []k8s.ScalableWorkload{},
+			PodName:         p.PodName,
+			Container:       p.Container,
+			Workload:        p.Workload,
+			Instance:        p.Instance,
+			BackupCommand:   p.BackupCommand,
+			WorkloadsToStop: []k8s.ScalableWorkload{},
 		}
-		if !c.HasRestoreCommand {
-			c.SuggestedCommand = restore.SuggestRestoreCommand(p.BackupCommand)
+		if cmd, source, err := s.Orch.ResolveRestoreCommand(&p); err == nil {
+			c.RestoreCommand = cmd
+			c.CommandSource = source
+			c.HasRestoreCommand = true
+		} else {
+			c.CommandError = err.Error()
 		}
 		if set, err := s.K8s.QuiesceSet(ctx, &p); err == nil {
 			if set != nil {
