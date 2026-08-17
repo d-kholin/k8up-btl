@@ -571,6 +571,11 @@ func (c *Clients) GetRestore(ctx context.Context, ns, name string) (*unstructure
         return c.Dynamic.Resource(GVRRestore).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 }
 
+// GetResource fetches any namespaced CR (used to poll K8up job status).
+func (c *Clients) GetResource(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, error) {
+        return c.Dynamic.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+}
+
 // DeleteRestore removes a Restore CR; its Job is cascade-deleted via owner
 // references (used when an operator cancels an in-flight restore).
 func (c *Clients) DeleteRestore(ctx context.Context, ns, name string) error {

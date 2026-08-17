@@ -31,6 +31,56 @@ export type RestoreState = {
   cancelled?: boolean
   progressPercent?: number
   bytesRecovered?: number
+  // SQL dump recovery fields (kind === 'recovery')
+  kind?: string
+  dbPod?: string
+  dbContainer?: string
+  dbWorkload?: WorkloadRef
+  restoreCommand?: string
+  dumpPath?: string
+  stoppedWorkloads?: ScalableWorkload[]
+  pvcParts?: PVCRestorePart[]
+  safetyBackupCR?: string
+}
+
+export type WorkloadRef = { kind: string; namespace: string; name: string }
+export type ScalableWorkload = WorkloadRef & { replicas: number }
+
+export type PVCRestorePart = {
+  snapshotName: string
+  snapshotId: string
+  pvcName: string
+  restoreCRName?: string
+  status?: 'pending' | 'running' | 'done' | 'failed'
+  workload?: WorkloadRef
+}
+
+export type RecoveryDBCandidate = {
+  podName: string
+  container: string
+  workload?: WorkloadRef
+  instance?: string
+  backupCommand: string
+  restoreCommand?: string
+  suggestedCommand?: string
+  workloadsToStop: ScalableWorkload[]
+  quiesceWarning?: string
+  hasRestoreCommand: boolean
+}
+
+export type RecoveryPVCOption = {
+  pvcName: string
+  snapshotName: string
+  snapshotId: string
+  date: string
+  deltaSeconds: number
+}
+
+export type RecoveryPlan = {
+  snapshot: { namespace: string; name: string; dumpPath: string; date: string }
+  dbCandidates: RecoveryDBCandidate[]
+  bestGuess: string
+  pvcOptions: RecoveryPVCOption[]
 }
 
 export type ClusterStatus = {
@@ -227,6 +277,16 @@ export const api = {
     req<RestoreState>('/api/v1/restores', { method: 'POST', body: JSON.stringify(body) }),
   cancelRestore: (id: string) =>
     req<{ status: string }>(`/api/v1/restores/${id}/cancel`, { method: 'POST' }),
+  recoveryPlan: (ns: string, name: string) =>
+    req<RecoveryPlan>(`/api/v1/snapshots/${ns}/${name}/recovery-plan`),
+  startRecovery: (body: {
+    namespace: string
+    dumpSnapshotName: string
+    dbPodName: string
+    skipSafetyBackup: boolean
+    pvcRestores: Array<{ snapshotName: string; pvcName: string }>
+  }) =>
+    req<RestoreState>('/api/v1/recoveries', { method: 'POST', body: JSON.stringify(body) }),
   interrupted: () => req<RestoreState[]>('/api/v1/interrupted'),
   resumeArgo: (ns: string, name: string) =>
     req<{ status: string }>(`/api/v1/argo/${ns}/${name}/resume`, { method: 'POST' }),

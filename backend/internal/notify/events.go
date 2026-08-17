@@ -35,6 +35,9 @@ func JobFailureEvent(e audit.BackupEvent) Event {
 // step (done or failed). Returns ok=false for non-terminal states.
 func RestoreOutcomeEvent(st restore.State) (Event, bool) {
 	target := fmt.Sprintf("%s/%s", st.PVCNamespace, st.PVCName)
+	if st.Kind == "recovery" {
+		target = fmt.Sprintf("%s (SQL recovery via %s)", st.PVCNamespace, st.DBPod)
+	}
 	switch st.Step {
 	case restore.StepDone:
 		body := fmt.Sprintf("Restore of PVC %s completed successfully.\n", target)

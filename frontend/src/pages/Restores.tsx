@@ -157,7 +157,9 @@ export default function Restores() {
                       </Badge>
                     </TableCell>
                     <TableCell className="max-w-[140px] truncate font-mono text-xs">
-                      {r.pvcNamespace}/{r.pvcName}
+                      {r.kind === 'recovery'
+                        ? `${r.pvcNamespace} · SQL (${r.dbPod || 'db'})`
+                        : `${r.pvcNamespace}/${r.pvcName}`}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -292,6 +294,17 @@ export default function Restores() {
                 )}
                 {selected.step === 'done' && !!selected.bytesRecovered && (
                   <span>{formatBytes(selected.bytesRecovered)} restored</span>
+                )}
+                {selected.kind === 'recovery' && !!selected.pvcParts?.length && (
+                  <span>
+                    PVCs:{' '}
+                    {selected.pvcParts
+                      .map((p) => `${p.pvcName} ${p.status === 'done' ? '✓' : p.status || ''}`)
+                      .join(', ')}
+                  </span>
+                )}
+                {selected.kind === 'recovery' && selected.safetyBackupCR && (
+                  <span>safety backup {selected.safetyBackupCR}</span>
                 )}
                 <span>{lines.length} lines</span>
               </div>

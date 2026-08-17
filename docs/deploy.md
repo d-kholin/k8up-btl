@@ -98,6 +98,57 @@ in-cluster NetworkPolicy (ingress only from `newt`).
 The API never returns 401 for missing identity. Audit rows use
 `AUTH_DEFAULT_USER` (default `operator`), or a proxy header if present.
 
+## SQL dump recovery (per-app setup)
+
+K8up takes application-level dumps via the `k8up.io/backupcommand` pod
+annotation. K8up has no inverse operation, so k8up btl restores them itself:
+it pipes `restic dump <snapshot> <file.sql>` into the DB pod over `pods/exec`,
+running a restore command that **must be declared in git** — the GUI never
+accepts a free-text command. During recovery only the app's own workloads are
+stopped (grouped by `app.kubernetes.io/instance`); other apps sharing the
+namespace keep running, and the DB pod stays up to receive the pipe.
+
+Add the annotation to the DB workload's **pod template**, next to the K8up
+backup annotations. It runs via `sh -c` in the backup container, so the pod's
+own env vars (credentials) are available:
+
+```yaml
+# PostgreSQL (pair with pg_dump --clean --if-exists in the backupcommand so
+# restores into a non-empty DB replace objects instead of colliding)
+k8up.io/backupcommand: sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"'
+k8up.io/file-extension: .sql
+k8up-btl.local/restore-command: psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+
+# MariaDB
+k8up.io/backupcommand: sh -c 'mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" --databases "$MARIADB_DATABASE"'
+k8up.io/file-extension: .sql
+k8up-btl.local/restore-command: mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"
+
+# MySQL
+k8up.io/backupcommand: sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --databases "$MYSQL_DATABASE"'
+k8up.io/file-extension: .sql
+k8up-btl.local/restore-command: mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
+```
+
+Optional — override which workloads are stopped during recovery (defaults to
+everything sharing the pod's `app.kubernetes.io/instance` label, excluding the
+DB workload itself):
+
+```yaml
+k8up-btl.local/quiesce-workloads: deployment/mealie,statefulset/mealie-worker
+```
+
+The recovery dialog also offers to restore the app's other PVCs to the
+snapshot nearest the dump's timestamp, so the whole app moves to one point in
+time. A fresh safety backup is taken (while quiesced) before any data is
+touched, unless explicitly skipped.
+
+**RBAC required:** `pods/exec` `create` (see `rbac.yaml`). This lets the
+backend exec into pods cluster-wide — a real privilege escalation over the
+previous read+scale surface. It is accepted for this single-operator tool
+behind SSO; if that is not acceptable in your environment, omit the rule and
+SQL recovery will fail cleanly while everything else keeps working.
+
 ## Verify
 
 ```bash

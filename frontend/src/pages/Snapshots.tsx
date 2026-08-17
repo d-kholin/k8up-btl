@@ -3,8 +3,9 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ChevronDown, ChevronRight, FolderSearch, GitCompareArrows } from 'lucide-react'
 import { api, type K8sObject } from '../api'
 import { formatWhen } from '../lib/utils'
-import { snapSpec, snapTime, workloadFromPaths } from '../lib/snapshots'
+import { isSqlDump, snapSpec, snapTime, workloadFromPaths } from '../lib/snapshots'
 import RestoreSnapshotDialog from '../components/RestoreSnapshotDialog'
+import RecoveryDialog from '../components/RecoveryDialog'
 import SnapshotCalendar, { dayKey } from '../components/SnapshotCalendar'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -27,8 +28,9 @@ export default function Snapshots() {
     nsParam ? { [nsParam]: true } : {},
   )
 
-  // Restore dialog
+  // Restore dialogs (PVC restore vs SQL dump recovery)
   const [restoreSnap, setRestoreSnap] = useState<K8sObject | null>(null)
+  const [recoverSnap, setRecoverSnap] = useState<K8sObject | null>(null)
 
   useEffect(() => {
     api.snapshots().then(setItems).catch((e: Error) => setError(e.message))
@@ -223,9 +225,15 @@ export default function Snapshots() {
                                   Browse
                                 </Link>
                               </Button>
-                              <Button size="sm" onClick={() => setRestoreSnap(s)}>
-                                Restore…
-                              </Button>
+                              {isSqlDump(s) ? (
+                                <Button size="sm" onClick={() => setRecoverSnap(s)}>
+                                  Recover…
+                                </Button>
+                              ) : (
+                                <Button size="sm" onClick={() => setRestoreSnap(s)}>
+                                  Restore…
+                                </Button>
+                              )}
                             </div>
                           </TableCell>
                         </TableRow>
@@ -240,6 +248,7 @@ export default function Snapshots() {
       })}
 
       <RestoreSnapshotDialog snapshot={restoreSnap} onClose={() => setRestoreSnap(null)} />
+      <RecoveryDialog snapshot={recoverSnap} onClose={() => setRecoverSnap(null)} />
     </div>
   )
 }

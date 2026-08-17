@@ -89,6 +89,15 @@ func NewServer(cfg config.Config, clients *k8s.Clients, orch *restore.Orchestrat
 		}
 		return jsonInt64(stats, "total_size"), nil
 	}
+	// SQL recovery pipes a single dump file out of restic (read-only) into the
+	// DB pod; credential resolution stays here.
+	orch.DumpSnapshot = func(ctx context.Context, snapNS, snapName, filePath string, w io.Writer) error {
+		repo, snapID, err := s.repoEnvForSnapshot(ctx, snapNS, snapName)
+		if err != nil {
+			return err
+		}
+		return s.Restic.Dump(ctx, repo, snapID, filePath, w, resticcmd.DumpOptions{})
+	}
 	return s
 }
 
@@ -108,6 +117,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/restores/{id}/logs", s.handleRestoreLogs)
 	mux.HandleFunc("POST /api/v1/restores/{id}/resume-argo", s.handleResumeArgoByRestore)
 	mux.HandleFunc("POST /api/v1/restores/{id}/cancel", s.handleCancelRestore)
+	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/recovery-plan", s.handleRecoveryPlan)
+	mux.HandleFunc("POST /api/v1/recoveries", s.handleStartRecovery)
 	mux.HandleFunc("POST /api/v1/argo/{namespace}/{name}/resume", s.handleResumeArgo)
 	mux.HandleFunc("GET /api/v1/interrupted", s.handleInterrupted)
 	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/files", s.handleListFiles)

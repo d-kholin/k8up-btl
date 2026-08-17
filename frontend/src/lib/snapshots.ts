@@ -25,6 +25,13 @@ export function guessPvc(s: K8sObject): string {
 // sourcePvcCandidates mirrors the backend's SourcePVCCandidates: the PVC names
 // a snapshot was taken from, derived from spec.paths (K8up mounts each PVC at
 // /data/<pvcName>). Restores are only allowed onto one of these.
+// isSqlDump: application-level dump snapshot (K8up backupcommand/stdin backup)
+// — restored by piping into the DB client, not onto a PVC.
+export function isSqlDump(s: K8sObject): boolean {
+  const paths = snapSpec(s).paths || []
+  return paths.some((p) => p.endsWith('.sql'))
+}
+
 export function sourcePvcCandidates(s: K8sObject): string[] {
   const paths = snapSpec(s).paths || []
   const out: string[] = []

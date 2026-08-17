@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom'
 import { FolderSearch } from 'lucide-react'
 import type { BackupEvent, K8sObject } from '../api'
 import { cn } from '../lib/utils'
-import { snapSpec, workloadFromPaths } from '../lib/snapshots'
+import { isSqlDump, snapSpec, workloadFromPaths } from '../lib/snapshots'
 import RestoreSnapshotDialog from './RestoreSnapshotDialog'
+import RecoveryDialog from './RecoveryDialog'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
@@ -81,6 +82,7 @@ export default function BackupActivity({
   const [kind, setKind] = useState<KindFilter>('Backup')
   const [selected, setSelected] = useState<string | null>(null)
   const [restoreSnap, setRestoreSnap] = useState<K8sObject | null>(null)
+  const [recoverSnap, setRecoverSnap] = useState<K8sObject | null>(null)
   const [hover, setHover] = useState<{ key: string; label: string; x: number; y: number } | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -353,9 +355,15 @@ export default function BackupActivity({
                                         Browse
                                       </Link>
                                     </Button>
-                                    <Button size="sm" variant="secondary" onClick={() => setRestoreSnap(s)}>
-                                      Restore…
-                                    </Button>
+                                    {isSqlDump(s) ? (
+                                      <Button size="sm" variant="secondary" onClick={() => setRecoverSnap(s)}>
+                                        Recover…
+                                      </Button>
+                                    ) : (
+                                      <Button size="sm" variant="secondary" onClick={() => setRestoreSnap(s)}>
+                                        Restore…
+                                      </Button>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -377,6 +385,7 @@ export default function BackupActivity({
         )}
 
         <RestoreSnapshotDialog snapshot={restoreSnap} onClose={() => setRestoreSnap(null)} />
+        <RecoveryDialog snapshot={recoverSnap} onClose={() => setRecoverSnap(null)} />
       </CardContent>
     </Card>
   )

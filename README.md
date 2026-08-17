@@ -16,6 +16,7 @@ Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance 
 | Visibility | Cluster-wide Schedules, Snapshots, live Backup/Restore/Check/Prune status |
 | Restore | One-click restore with Argo pause/resume, durable mid-restore state, live progress, cancel |
 | Safety | Restore targets are locked to the PVC a snapshot was taken from (server-enforced) |
+| SQL recovery | Point-in-time recovery for `.sql` dump snapshots: quiesce the app (not the namespace), safety backup, pipe dump into the DB pod via a git-declared command, co-restore sibling PVCs — see `docs/deploy.md` |
 | Browse | Per-snapshot file tree + file/folder/snapshot download via `restic` (read-only), calendar day picker |
 | Compare | Diff two snapshots (`restic diff`): added/removed/modified files with byte deltas |
 | Notify | ntfy + email alerts for job failures, restore outcomes, interrupted restores; env config with UI overrides |

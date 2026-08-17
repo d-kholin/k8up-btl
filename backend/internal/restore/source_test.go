@@ -30,6 +30,30 @@ func TestSourcePVCCandidates(t *testing.T) {
 	}
 }
 
+func TestDumpFilePath(t *testing.T) {
+	if got := DumpFilePath([]string{"/data/app", "/default-mealie-db.sql"}); got != "/default-mealie-db.sql" {
+		t.Fatalf("DumpFilePath = %q", got)
+	}
+	if got := DumpFilePath([]string{"/data/app"}); got != "" {
+		t.Fatalf("expected empty, got %q", got)
+	}
+}
+
+func TestSuggestRestoreCommand(t *testing.T) {
+	cases := map[string]string{
+		`sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB'`: `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"`,
+		`pg_dumpall -U postgres`:            `psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" postgres`,
+		`mariadb-dump -u root db`:           `mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"`,
+		`mysqldump --all-databases`:         `mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"`,
+		`tar czf - /data`:                   ``,
+	}
+	for in, want := range cases {
+		if got := SuggestRestoreCommand(in); got != want {
+			t.Errorf("SuggestRestoreCommand(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestSnapshotPaths(t *testing.T) {
 	obj := map[string]any{
 		"spec": map[string]any{

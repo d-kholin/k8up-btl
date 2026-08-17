@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"regexp"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/d-kholin/k8up-gui/internal/audit"
 	"github.com/d-kholin/k8up-gui/internal/k8s"
@@ -29,6 +31,11 @@ const (
 	StepResumingArgo Step = "resuming_argo"
 	StepDone         Step = "done"
 	StepFailed       Step = "failed"
+	// SQL dump recovery steps.
+	StepQuiescing     Step = "quiescing"
+	StepSafetyBackup  Step = "safety_backup"
+	StepRestoringDB   Step = "restoring_db"
+	StepRestoringPVCs Step = "restoring_pvcs"
 )
 
 // State is durable (controller STS annotation) + in-memory job status.
@@ -61,6 +68,29 @@ type State struct {
 	Cancelled       bool `json:"cancelled,omitempty"`
 	// ProgressPercent is best-effort, parsed from restic job log lines.
 	ProgressPercent *float64 `json:"progressPercent,omitempty"`
+
+	// Recovery (SQL dump point-in-time) fields; Kind is "" for plain PVC
+	// restores and "recovery" for SQL dump recovery.
+	Kind             string                 `json:"kind,omitempty"`
+	DBPod            string                 `json:"dbPod,omitempty"`
+	DBContainer      string                 `json:"dbContainer,omitempty"`
+	DBWorkload       *k8s.WorkloadRef       `json:"dbWorkload,omitempty"`
+	RestoreCommand   string                 `json:"restoreCommand,omitempty"`
+	DumpPath         string                 `json:"dumpPath,omitempty"`
+	StoppedWorkloads []k8s.ScalableWorkload `json:"stoppedWorkloads,omitempty"`
+	PVCParts         []PVCRestorePart       `json:"pvcParts,omitempty"`
+	SafetyBackupCR   string                 `json:"safetyBackupCR,omitempty"`
+}
+
+// PVCRestorePart is one additional PVC restored to the same point in time as
+// the SQL dump during a recovery.
+type PVCRestorePart struct {
+	SnapshotName  string           `json:"snapshotName"`
+	SnapshotID    string           `json:"snapshotId"`
+	PVCName       string           `json:"pvcName"`
+	RestoreCRName string           `json:"restoreCRName,omitempty"`
+	Status        string           `json:"status,omitempty"` // pending | running | done | failed
+	Workload      *k8s.WorkloadRef `json:"workload,omitempty"`
 }
 
 type Request struct {
@@ -85,6 +115,9 @@ type Orchestrator struct {
 	// SnapshotSize resolves the snapshot's restore-size in bytes (wired by the
 	// API server, which owns restic credential resolution). Best-effort.
 	SnapshotSize func(ctx context.Context, snapNS, snapName, snapID string) (int64, error)
+	// DumpSnapshot streams one file out of a snapshot (wired by the API server;
+	// used by SQL recovery to pipe the dump into the DB pod).
+	DumpSnapshot func(ctx context.Context, snapNS, snapName, path string, w io.Writer) error
 
 	mu   sync.Mutex
 	jobs map[string]*State
@@ -336,79 +369,7 @@ func (o *Orchestrator) run(st *State) {
 			}
 		}
 
-		// CRITICAL: always resume Argo controller if we paused it.
-		if argoPaused {
-			st.Step = StepResumingArgo
-			o.set(st)
-			if err := o.Clients.ResumeArgoController(ctx, o.ArgoNS, st.ArgoControllerReplicas); err != nil {
-				o.Log.Error("failed to resume argo controller", "err", err)
-				st.LastError = joinErr(st.LastError, fmt.Errorf("resume argo controller: %w", err))
-				resumed := false
-				st.ArgoSyncResumed = &resumed
-				b, _ := json.Marshal(st)
-				_ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, string(b))
-			} else {
-				resumed := true
-				st.ArgoSyncResumed = &resumed
-				st.ArgoPausedGlobally = false
-				argoPaused = false
-				_ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, "")
-			}
-		}
-
-		now := time.Now().UTC()
-		st.FinishedAt = &now
-		if runErr != nil {
-			st.Step = StepFailed
-			if st.LastError == "" {
-				st.LastError = runErr.Error()
-			}
-		} else if st.Step != StepFailed {
-			st.Step = StepDone
-		}
-		o.mu.Lock()
-		o.jobs[st.RestoreID] = st
-		if o.activeID == st.RestoreID {
-			o.activeID = ""
-		}
-		o.mu.Unlock()
-		o.persist(st)
-		// Keep last log snapshot durable at finish.
-		if o.Audit != nil && o.Logs != nil {
-			if lines := o.Logs.Snapshot(st.RestoreID); len(lines) > 0 {
-				_ = o.Audit.ReplaceRestoreLogs(context.Background(), st.RestoreID, lines)
-			}
-		}
-		o.publish(st)
-
-		if o.Audit != nil {
-			status := "success"
-			if st.Step == StepFailed {
-				status = "failed"
-			}
-			var pausedPtr *bool
-			if st.ArgoSyncResumed != nil {
-				p := !*st.ArgoSyncResumed
-				pausedPtr = &p
-			}
-			argoName := "argocd/" + k8s.ArgoApplicationControllerSTS
-			if st.Application != nil {
-				argoName = st.Application.Namespace + "/" + st.Application.Name
-			}
-			_, _ = o.Audit.Insert(ctx, audit.Entry{
-				Kind:       "restore",
-				Actor:      st.Actor,
-				Namespace:  st.PVCNamespace,
-				Snapshot:   st.SnapshotID,
-				PVC:        st.PVCName,
-				Status:     status,
-				Detail:     st.LastError,
-				RestoreID:  st.RestoreID,
-				ArgoApp:    argoName,
-				ArgoPaused: pausedPtr,
-				Bytes:      st.BytesRecovered,
-			})
-		}
+		o.finalize(st, runErr, &argoPaused)
 	}()
 
 	// 1. Resolve ownership
@@ -509,6 +470,87 @@ func (o *Orchestrator) run(st *State) {
 	// 6. Resume Argo controller — defer
 }
 
+// finalize resumes the Argo controller (if this run paused it), records the
+// terminal state, persists logs, and writes the audit row. Shared by the PVC
+// restore and SQL recovery flows; must be the last thing a run's defer does.
+func (o *Orchestrator) finalize(st *State, runErr error, argoPaused *bool) {
+	ctx := context.Background()
+
+	// CRITICAL: always resume Argo controller if we paused it.
+	if *argoPaused {
+		st.Step = StepResumingArgo
+		o.set(st)
+		if err := o.Clients.ResumeArgoController(ctx, o.ArgoNS, st.ArgoControllerReplicas); err != nil {
+			o.Log.Error("failed to resume argo controller", "err", err)
+			st.LastError = joinErr(st.LastError, fmt.Errorf("resume argo controller: %w", err))
+			resumed := false
+			st.ArgoSyncResumed = &resumed
+			b, _ := json.Marshal(st)
+			_ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, string(b))
+		} else {
+			resumed := true
+			st.ArgoSyncResumed = &resumed
+			st.ArgoPausedGlobally = false
+			*argoPaused = false
+			_ = o.Clients.SetArgoControllerStateAnnotation(ctx, o.ArgoNS, "")
+		}
+	}
+
+	now := time.Now().UTC()
+	st.FinishedAt = &now
+	if runErr != nil {
+		st.Step = StepFailed
+		if st.LastError == "" {
+			st.LastError = runErr.Error()
+		}
+	} else if st.Step != StepFailed {
+		st.Step = StepDone
+	}
+	o.mu.Lock()
+	o.jobs[st.RestoreID] = st
+	if o.activeID == st.RestoreID {
+		o.activeID = ""
+	}
+	o.mu.Unlock()
+	o.persist(st)
+	// Keep last log snapshot durable at finish.
+	if o.Audit != nil && o.Logs != nil {
+		if lines := o.Logs.Snapshot(st.RestoreID); len(lines) > 0 {
+			_ = o.Audit.ReplaceRestoreLogs(context.Background(), st.RestoreID, lines)
+		}
+	}
+	o.publish(st)
+
+	if o.Audit != nil {
+		status := "success"
+		if st.Step == StepFailed {
+			status = "failed"
+		}
+		var pausedPtr *bool
+		if st.ArgoSyncResumed != nil {
+			p := !*st.ArgoSyncResumed
+			pausedPtr = &p
+		}
+		argoName := "argocd/" + k8s.ArgoApplicationControllerSTS
+		if st.Application != nil {
+			argoName = st.Application.Namespace + "/" + st.Application.Name
+		}
+		_, _ = o.Audit.Insert(ctx, audit.Entry{
+			Kind:       "restore",
+			Actor:      st.Actor,
+			Namespace:  st.PVCNamespace,
+			Snapshot:   st.SnapshotID,
+			PVC:        st.PVCName,
+			Status:     status,
+			Detail:     st.LastError,
+			RestoreID:  st.RestoreID,
+			ArgoApp:    argoName,
+			ArgoPaused: pausedPtr,
+			Bytes:      st.BytesRecovered,
+		})
+	}
+}
+
 func (o *Orchestrator) emitLog(restoreID, line string) {
 	if o.Logs != nil {
 		o.Logs.Append(restoreID, line)
@@ -537,11 +579,18 @@ func (o *Orchestrator) followRestoreLogs(ctx context.Context, restoreID, ns, crN
 }
 
 func (o *Orchestrator) waitRestoreComplete(ctx context.Context, ns, name string) error {
+	return o.waitJobComplete(ctx, k8s.GVRRestore, ns, name)
+}
+
+// waitJobComplete polls any K8up job CR (Restore, Backup, …) until it reports
+// a terminal state — they share the status.finished + Completed/Failed
+// condition schema.
+func (o *Orchestrator) waitJobComplete(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		obj, err := o.Clients.GetRestore(ctx, ns, name)
+		obj, err := o.Clients.GetResource(ctx, gvr, ns, name)
 		if err != nil {
 			return err
 		}
