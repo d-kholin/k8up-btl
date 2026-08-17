@@ -26,18 +26,38 @@ mid-restore. On clusters without Argo CD the pause is skipped automatically
 your replica counts** (Flux, etc.), suspend its reconciliation of the target
 app yourself before restoring — nothing pauses it for you.
 
-## Step 1 — edit the manifests
+## Step 1 — consume the manifests
 
-Copy `deploy/k8s/` into your own GitOps repo (recommended) or edit in place.
-Four things are environment-specific:
+**Recommended: kustomize remote base.** Point your GitOps repo at
+`deploy/k8s` pinned to a release, and keep only cluster-specific overrides in
+your overlay — manifest changes (new RBAC rules, env, probes) then flow to
+your cluster with every version bump instead of drifting in a copy:
 
-1. **Image tag** — `kustomization.yaml` ships with a `1.x.x` placeholder:
+```yaml
+# your-gitops-repo/apps/k8up-btl/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/d-kholin/k8up-btl//deploy/k8s?ref=v1.8.0
+images:
+  - name: ghcr.io/d-kholin/k8up-btl
+    newTag: "1.8.0"
+# plus any cluster-specific patches (network policy, env, storage class)
+```
 
-   ```yaml
-   images:
-     - name: ghcr.io/d-kholin/k8up-btl
-       newTag: "1.7.3"   # pick a release; Renovate-friendly
-   ```
+Renovate understands both pins: its kustomize manager bumps the remote-base
+`?ref=` (github tags) and the image `newTag` (docker registry), so releases
+arrive as ordinary dependency PRs with manifests and image moving together.
+Argo CD and Flux both render remote bases natively.
+
+Alternatively, copy `deploy/k8s/` into your repo and edit in place — you then
+own keeping it in sync with upstream changes.
+
+Either way, four things are environment-specific (in the remote-base setup,
+express them as overlay patches rather than edits):
+
+1. **Image tag** — the base ships a `1.x.x` placeholder; the `images:`
+   override in your overlay (shown above) sets the real release tag.
 
 2. **Storage class** — `pvc.yaml` requests a 1Gi RWO volume (SQLite audit log
    only) using the cluster's default StorageClass. Uncomment

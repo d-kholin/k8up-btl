@@ -14,6 +14,7 @@ labels:
     includeSelectors: false
 images:
   - name: ghcr.io/d-kholin/k8up-btl
-    # Reference manifests only — set a real tag here (or via kustomize edit).
-    # The live cluster pin is managed in k3s-hl (apps/k8up-btl/manifests).
+    # Placeholder. Consume this directory as a kustomize remote base pinned to
+    # a release ref and override the tag in your overlay (see
+    # docs/getting-started.md), or set a real tag here for direct apply.
     newTag: "1.x.x"
