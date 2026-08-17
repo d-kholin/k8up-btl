@@ -582,3 +582,42 @@ func (c *Clients) DeleteRestore(ctx context.Context, ns, name string) error {
         fg := metav1.DeletePropagationForeground
         return c.Dynamic.Resource(GVRRestore).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &fg})
 }
+
+// DeleteBackup removes a Backup CR; its Jobs are cascade-deleted via owner
+// references (used when a recovery aborts before its safety backup finishes —
+// an unfinished Backup's job would otherwise retry pod creation forever).
+func (c *Clients) DeleteBackup(ctx context.Context, ns, name string) error {
+        fg := metav1.DeletePropagationForeground
+        return c.Dynamic.Resource(GVRBackup).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &fg})
+}
+
+// ResolveBackupSpec builds the spec for a one-shot Backup from the namespace's
+// Schedule so it lands in the same repository and passes the same Pod Security
+// admission as the scheduled backups: backend, podConfigRef and
+// podSecurityContext are inherited (spec.backup.* wins over spec.*). Fields
+// that cannot be resolved are omitted — K8up then falls back to its operator
+// defaults, same as a bare Backup.
+func (c *Clients) ResolveBackupSpec(ctx context.Context, namespace string) map[string]any {
+        spec := map[string]any{}
+        if be, err := c.ResolveRestoreBackend(ctx, namespace, ""); err == nil && be != nil {
+                spec["backend"] = be
+        }
+        list, err := c.Dynamic.Resource(GVRSchedule).Namespace(namespace).List(ctx, metav1.ListOptions{})
+        if err != nil {
+                return spec
+        }
+        for i := range list.Items {
+                obj := list.Items[i].Object
+                for _, field := range []string{"podConfigRef", "podSecurityContext"} {
+                        if _, ok := spec[field]; ok {
+                                continue
+                        }
+                        if v, found, _ := unstructured.NestedMap(obj, "spec", "backup", field); found && len(v) > 0 {
+                                spec[field] = v
+                        } else if v, found, _ := unstructured.NestedMap(obj, "spec", field); found && len(v) > 0 {
+                                spec[field] = v
+                        }
+                }
+        }
+        return spec
+}

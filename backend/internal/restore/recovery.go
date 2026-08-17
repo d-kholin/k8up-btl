@@ -228,6 +228,7 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 
 	var runErr error
 	argoPaused := false
+	safetyDone := false
 	var stopped []k8s.ScalableWorkload
 
 	defer func() {
@@ -247,6 +248,17 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 			if cancelled {
 				st.Cancelled = true
 				st.LastError = "recovery cancelled by operator"
+			}
+			// Delete an unfinished safety Backup CR — its job would otherwise
+			// keep retrying (e.g. PodSecurity-rejected pods) long after the
+			// recovery is gone. A finished safety backup is kept: it is the
+			// undo point.
+			if st.SafetyBackupCR != "" && !safetyDone {
+				if err := o.Clients.DeleteBackup(ctx, st.PVCNamespace, st.SafetyBackupCR); err != nil {
+					o.Log.Warn("delete safety backup CR after abort", "cr", st.SafetyBackupCR, "err", err)
+				} else {
+					o.emitLog(st.RestoreID, fmt.Sprintf("··· deleted unfinished safety Backup CR %s", st.SafetyBackupCR))
+				}
 			}
 			// Delete any in-flight PVC Restore CR — an orphaned restic job must
 			// not keep writing to a PVC the app is about to remount.
@@ -342,7 +354,16 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 		st.SafetyBackupCR = crName
 		o.set(st)
 		o.emitLog(st.RestoreID, fmt.Sprintf("taking safety backup %s before touching data…", crName))
-		if _, err := o.Clients.CreateSimpleJobCR(runCtx, k8s.GVRBackup, "Backup", st.PVCNamespace, crName, map[string]any{}); err != nil {
+		// Inherit backend + pod security from the namespace Schedule — a bare
+		// Backup lands in the operator's default repo and its pods are rejected
+		// in PodSecurity-restricted namespaces.
+		spec := o.Clients.ResolveBackupSpec(runCtx, st.PVCNamespace)
+		if _, ok := spec["podConfigRef"]; !ok {
+			if _, ok := spec["podSecurityContext"]; !ok {
+				o.emitLog(st.RestoreID, "··· WARNING: namespace Schedule sets no podConfigRef/podSecurityContext — backup pods may be rejected in PodSecurity-restricted namespaces")
+			}
+		}
+		if _, err := o.Clients.CreateSimpleJobCR(runCtx, k8s.GVRBackup, "Backup", st.PVCNamespace, crName, spec); err != nil {
 			runErr = fmt.Errorf("create safety backup: %w", err)
 			return
 		}
@@ -357,6 +378,7 @@ func (o *Orchestrator) runRecovery(st *State, db *k8s.DBPod, skipSafety bool) {
 			runErr = fmt.Errorf("safety backup: %w", err)
 			return
 		}
+		safetyDone = true
 		o.emitLog(st.RestoreID, "··· safety backup finished")
 	}
 
