@@ -3,47 +3,14 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ChevronDown, ChevronRight, FolderSearch } from 'lucide-react'
 import { api, type K8sObject } from '../api'
 import { formatWhen } from '../lib/utils'
+import { snapSpec, snapTime, workloadFromPaths } from '../lib/snapshots'
+import RestoreSnapshotDialog from '../components/RestoreSnapshotDialog'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader } from '../components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
 import { Input } from '../components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
-
-type SnapSpec = { date?: string; id?: string; paths?: string[]; repository?: string }
-
-function snapSpec(s: K8sObject): SnapSpec {
-  return (s.spec || {}) as SnapSpec
-}
-
-function snapTime(s: K8sObject): number {
-  const d = snapSpec(s).date || s.creationTimestamp
-  return d ? new Date(d).getTime() : 0
-}
-
-function workloadFromPaths(paths: string[]): string {
-  if (!paths.length) return '(unknown)'
-  return paths
-    .map((p) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || p)
-    .join(', ')
-}
-
-function guessPvc(s: K8sObject): string {
-  const paths = snapSpec(s).paths || []
-  return (
-    paths
-      .map((p) => p.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '')
-      .find((b) => b && !b.endsWith('.sql')) || ''
-  )
-}
 
 type NsGroup = { namespace: string; items: K8sObject[] }
 
@@ -57,13 +24,9 @@ export default function Snapshots() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(
     nsParam ? { [nsParam]: true } : {},
   )
-  const [busy, setBusy] = useState(false)
 
   // Restore dialog
   const [restoreSnap, setRestoreSnap] = useState<K8sObject | null>(null)
-  const [pvcNamespace, setPvcNamespace] = useState('')
-  const [pvcName, setPvcName] = useState('')
-  const [confirmText, setConfirmText] = useState('')
 
   useEffect(() => {
     api.snapshots().then(setItems).catch((e: Error) => setError(e.message))
@@ -94,38 +57,6 @@ export default function Snapshots() {
     out.sort((a, b) => a.namespace.localeCompare(b.namespace))
     return out
   }, [items, filter])
-
-  function openRestore(s: K8sObject) {
-    setRestoreSnap(s)
-    setPvcNamespace(s.namespace || '')
-    setPvcName(guessPvc(s))
-    setConfirmText('')
-  }
-
-  async function submitRestore() {
-    if (!restoreSnap) return
-    if (confirmText !== 'restore') return
-    if (!pvcNamespace || !pvcName) {
-      setError('PVC namespace and name are required')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      await api.startRestore({
-        snapshotNamespace: restoreSnap.namespace || '',
-        snapshotName: restoreSnap.name || '',
-        pvcNamespace,
-        pvcName,
-      })
-      setRestoreSnap(null)
-      window.location.href = '/restores'
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const total = groups.reduce((n, g) => n + g.items.length, 0)
 
@@ -238,7 +169,7 @@ export default function Snapshots() {
                                   Browse
                                 </Link>
                               </Button>
-                              <Button size="sm" onClick={() => openRestore(s)}>
+                              <Button size="sm" onClick={() => setRestoreSnap(s)}>
                                 Restore…
                               </Button>
                             </div>
@@ -254,56 +185,7 @@ export default function Snapshots() {
         )
       })}
 
-      <Dialog open={!!restoreSnap} onOpenChange={(o) => !o && setRestoreSnap(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirm restore</DialogTitle>
-            <DialogDescription>
-              Restores snapshot{' '}
-              <span className="font-mono text-foreground">
-                {restoreSnap?.namespace}/{restoreSnap?.name}
-              </span>{' '}
-              onto a PVC. Argo CD reconciliation is paused cluster-wide for the duration, the
-              workload is scaled to 0, then brought back.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-3 py-2">
-            <div className="grid gap-1.5">
-              <label className="text-xs text-muted-foreground">PVC namespace</label>
-              <Input value={pvcNamespace} onChange={(e) => setPvcNamespace(e.target.value)} />
-            </div>
-            <div className="grid gap-1.5">
-              <label className="text-xs text-muted-foreground">PVC name</label>
-              <Input value={pvcName} onChange={(e) => setPvcName(e.target.value)} />
-            </div>
-            <div className="grid gap-1.5">
-              <label className="text-xs text-muted-foreground">
-                Type <span className="font-mono text-foreground">restore</span> to confirm
-              </label>
-              <Input
-                value={confirmText}
-                onChange={(e) => setConfirmText(e.target.value)}
-                placeholder="restore"
-                autoComplete="off"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRestoreSnap(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={busy || confirmText !== 'restore' || !pvcNamespace || !pvcName}
-              onClick={submitRestore}
-            >
-              {busy ? 'Starting…' : 'Start restore'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <RestoreSnapshotDialog snapshot={restoreSnap} onClose={() => setRestoreSnap(null)} />
     </div>
   )
 }

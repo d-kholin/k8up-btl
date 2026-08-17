@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { BackupEvent } from '../api'
+import { FolderSearch } from 'lucide-react'
+import type { BackupEvent, K8sObject } from '../api'
 import { cn } from '../lib/utils'
+import { snapSpec, workloadFromPaths } from '../lib/snapshots'
+import RestoreSnapshotDialog from './RestoreSnapshotDialog'
 import { Badge } from './ui/badge'
+import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 
@@ -38,6 +42,23 @@ function cellColor(a?: DayAgg): string {
   return 'var(--activity-empty)'
 }
 
+// matchSnapshots finds the Snapshot CR(s) a successful Backup run produced:
+// same namespace, snapshot date inside the run window (with slack for clock
+// skew and for restic finishing just after the CR flips to finished).
+export function matchSnapshots(e: BackupEvent, snapshots: K8sObject[]): K8sObject[] {
+  if (e.kind !== 'Backup' || e.status !== 'succeeded') return []
+  const started = new Date(e.startedAt).getTime()
+  const start = started - 2 * 60_000
+  const end = (e.finishedAt ? new Date(e.finishedAt).getTime() : started + 30 * 60_000) + 5 * 60_000
+  return snapshots.filter((s) => {
+    if (s.namespace !== e.namespace) return false
+    const d = snapSpec(s).date || s.creationTimestamp
+    if (!d) return false
+    const t = new Date(d).getTime()
+    return t >= start && t <= end
+  })
+}
+
 function summarize(a?: DayAgg): string {
   if (!a) return 'no runs recorded'
   const parts: string[] = []
@@ -50,13 +71,16 @@ function summarize(a?: DayAgg): string {
 
 export default function BackupActivity({
   events,
+  snapshots,
   loading,
 }: {
   events: BackupEvent[]
+  snapshots: K8sObject[]
   loading: boolean
 }) {
   const [kind, setKind] = useState<KindFilter>('Backup')
   const [selected, setSelected] = useState<string | null>(null)
+  const [restoreSnap, setRestoreSnap] = useState<K8sObject | null>(null)
   const [hover, setHover] = useState<{ key: string; label: string; x: number; y: number } | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -270,47 +294,80 @@ export default function BackupActivity({
                     <TableHead>Schedule</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Message</TableHead>
+                    <TableHead className="text-right">Restore point</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {[...selectedAgg.events]
                     .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
-                    .map((e) => (
-                      <TableRow key={e.uid}>
-                        <TableCell className="whitespace-nowrap text-xs">
-                          {new Date(e.startedAt).toLocaleTimeString()}
-                        </TableCell>
-                        <TableCell className="text-xs">{e.kind}</TableCell>
-                        <TableCell className="font-mono text-xs">
-                          <Link
-                            to={`/jobs?namespace=${encodeURIComponent(e.namespace)}`}
-                            className="hover:underline"
-                            title="Open in Jobs"
-                          >
-                            {e.namespace}/{e.name}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{e.schedule || '—'}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              e.status === 'succeeded'
-                                ? 'success'
-                                : e.status === 'failed'
-                                  ? 'danger'
-                                  : e.status === 'running'
-                                    ? 'secondary'
-                                    : 'warning'
-                            }
-                          >
-                            {e.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="max-w-[280px] truncate text-xs text-muted-foreground" title={e.message}>
-                          {e.message || '—'}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    .map((e) => {
+                      const snaps = matchSnapshots(e, snapshots)
+                      return (
+                        <TableRow key={e.uid}>
+                          <TableCell className="whitespace-nowrap text-xs">
+                            {new Date(e.startedAt).toLocaleTimeString()}
+                          </TableCell>
+                          <TableCell className="text-xs">{e.kind}</TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <Link
+                              to={`/jobs?namespace=${encodeURIComponent(e.namespace)}`}
+                              className="hover:underline"
+                              title="Open in Jobs"
+                            >
+                              {e.namespace}/{e.name}
+                            </Link>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">{e.schedule || '—'}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                e.status === 'succeeded'
+                                  ? 'success'
+                                  : e.status === 'failed'
+                                    ? 'danger'
+                                    : e.status === 'running'
+                                      ? 'secondary'
+                                      : 'warning'
+                              }
+                            >
+                              {e.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="max-w-[280px] truncate text-xs text-muted-foreground" title={e.message}>
+                            {e.message || '—'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {snaps.length > 0 ? (
+                              <div className="flex flex-col items-end gap-1">
+                                {snaps.map((s) => (
+                                  <div key={`${s.namespace}/${s.name}`} className="flex items-center gap-1">
+                                    <span
+                                      className="max-w-[140px] truncate font-mono text-[11px] text-muted-foreground"
+                                      title={(snapSpec(s).paths || []).join(', ')}
+                                    >
+                                      {workloadFromPaths(snapSpec(s).paths || [])}
+                                    </span>
+                                    <Button asChild size="sm" variant="ghost">
+                                      <Link to={`/snapshots/${s.namespace}/${s.name}/browse`}>
+                                        <FolderSearch className="h-3.5 w-3.5" />
+                                        Browse
+                                      </Link>
+                                    </Button>
+                                    <Button size="sm" variant="secondary" onClick={() => setRestoreSnap(s)}>
+                                      Restore…
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : e.kind === 'Backup' && e.status === 'succeeded' ? (
+                              <span className="text-xs text-muted-foreground">no snapshot found</span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                 </TableBody>
               </Table>
             ) : (
@@ -318,6 +375,8 @@ export default function BackupActivity({
             )}
           </div>
         )}
+
+        <RestoreSnapshotDialog snapshot={restoreSnap} onClose={() => setRestoreSnap(null)} />
       </CardContent>
     </Card>
   )

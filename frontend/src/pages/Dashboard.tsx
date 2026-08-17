@@ -308,7 +308,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <BackupActivity events={history} loading={loading} />
+      <BackupActivity events={history} snapshots={snapshots} loading={loading} />
 
       <BackupFreshness schedules={schedules} snapshots={snapshots} pvcs={pvcs} loading={loading} />
 
