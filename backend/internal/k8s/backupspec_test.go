@@ -106,3 +106,15 @@ func TestCreateRestoreCRNoScheduleOmitsPodConfig(t *testing.T) {
 		t.Fatalf("podConfigRef should be omitted without a Schedule: %v", obj.Object["spec"])
 	}
 }
+
+func TestHasSchedule(t *testing.T) {
+	c := fakeDynamic(schedule("scheduled", map[string]any{
+		"backup": map[string]any{"schedule": "@daily-random"},
+	}))
+	if ok, err := c.HasSchedule(context.Background(), "scheduled"); err != nil || !ok {
+		t.Fatalf("expected schedule in %q: ok=%v err=%v", "scheduled", ok, err)
+	}
+	if ok, err := c.HasSchedule(context.Background(), "bare"); err != nil || ok {
+		t.Fatalf("expected no schedule in %q: ok=%v err=%v", "bare", ok, err)
+	}
+}

@@ -20,7 +20,8 @@ Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance 
 | Browse | Per-snapshot file tree + file/folder/snapshot download via `restic` (read-only), calendar day picker |
 | Compare | Diff two snapshots (`restic diff`): added/removed/modified files with byte deltas |
 | Notify | ntfy + email alerts for job failures, restore outcomes, interrupted restores; env config with UI overrides |
-| Actions | Ad-hoc Backup / Check CRs from the Workloads page — spec inherited from the namespace's Schedule |
+| Actions | Ad-hoc Backup / Check CRs from the Workloads page — spec inherited from the namespace's Schedule (required: namespaces without one are refused) |
+| Console | Live per-job console for any running Backup/Restore/Check/Prune: streamed pod logs, restic progress bar, and batch-Job diagnostics (e.g. Pod Security rejections) when no pod starts |
 | Audit | 90-day restore + download history, filterable + paginated + CSV export |
 | Health | `/healthz` (liveness), `/readyz` (cluster connectivity), `/metrics` (Prometheus), degraded-mode banner |
 | Auth | No in-app auth; Pangolin + Newt NetworkPolicy only |

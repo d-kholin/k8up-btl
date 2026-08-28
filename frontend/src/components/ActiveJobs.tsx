@@ -1,12 +1,21 @@
 import { Link } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { Loader2, SquareTerminal } from 'lucide-react'
 import type { LiveJob } from '../lib/jobs'
 import { formatAge } from '../lib/utils'
 import { Badge } from './ui/badge'
 import { Card, CardContent } from './ui/card'
 
-/** Horizontal strip of currently-running K8up jobs. Renders nothing when idle. */
-export default function ActiveJobs({ jobs, linkNamespace = true }: { jobs: LiveJob[]; linkNamespace?: boolean }) {
+/** Horizontal strip of currently-running K8up jobs. Renders nothing when idle.
+ * With onSelect set, each job gets a console button that opens its live logs. */
+export default function ActiveJobs({
+  jobs,
+  linkNamespace = true,
+  onSelect,
+}: {
+  jobs: LiveJob[]
+  linkNamespace?: boolean
+  onSelect?: (job: LiveJob) => void
+}) {
   const active = jobs.filter((j) => !j.finished)
   if (active.length === 0) return null
   const now = Date.now()
@@ -34,6 +43,16 @@ export default function ActiveJobs({ jobs, linkNamespace = true }: { jobs: LiveJ
             )}
             {j.createdAt && (
               <span className="text-muted-foreground">{formatAge(now - new Date(j.createdAt).getTime())}</span>
+            )}
+            {onSelect && (
+              <button
+                type="button"
+                onClick={() => onSelect(j)}
+                title="Open live console"
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <SquareTerminal className="h-3.5 w-3.5" />
+              </button>
             )}
           </span>
         ))}

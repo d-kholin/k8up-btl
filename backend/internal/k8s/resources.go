@@ -594,6 +594,18 @@ func (c *Clients) DeleteBackup(ctx context.Context, ns, name string) error {
         return c.Dynamic.Resource(GVRBackup).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &fg})
 }
 
+// HasSchedule reports whether the namespace has at least one K8up Schedule.
+// Ad-hoc job CRs are refused without one: there is nothing to inherit the
+// repository or pod security from, so the job would either land in the wrong
+// repository or hang forever with its pod rejected by Pod Security admission.
+func (c *Clients) HasSchedule(ctx context.Context, namespace string) (bool, error) {
+        list, err := c.Dynamic.Resource(GVRSchedule).Namespace(namespace).List(ctx, metav1.ListOptions{})
+        if err != nil {
+                return false, err
+        }
+        return len(list.Items) > 0, nil
+}
+
 // ResolveJobSpec builds the spec for a one-shot job CR (Backup, Check, …) from
 // the namespace's Schedule so it lands in the same repository and passes the
 // same Pod Security admission as the scheduled jobs: backend, podConfigRef and

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { Ban } from 'lucide-react'
 import { api } from '../api'
 import { Alert } from './ui/alert'
 import { Button } from './ui/button'
@@ -15,7 +15,10 @@ import {
 export type NamespaceOption = { namespace: string; hasSchedule: boolean }
 
 /** Confirm-and-fire dialog for on-demand Backup / Check CRs. The created spec
- * inherits backend + pod security from the namespace's Schedule server-side. */
+ * inherits backend + pod security from the namespace's Schedule server-side —
+ * which is why namespaces without a Schedule are blocked (the server refuses
+ * them too): the job would target the wrong repository or hang with its pod
+ * rejected by Pod Security admission. */
 export default function RunBackupDialog({
   open,
   onOpenChange,
@@ -38,13 +41,14 @@ export default function RunBackupDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) {
-      setNs(initialNamespace || options[0]?.namespace || '')
+      setNs(initialNamespace || options.find((o) => o.hasSchedule)?.namespace || '')
       setError('')
       setBusy('')
     }
   }, [open])
 
   const selected = options.find((o) => o.namespace === ns)
+  const blocked = !!selected && !selected.hasSchedule
 
   async function run(kind: 'backup' | 'check') {
     if (!ns) {
@@ -87,30 +91,34 @@ export default function RunBackupDialog({
           >
             {options.length === 0 && <option value="">No namespaces found</option>}
             {options.map((o) => (
-              <option key={o.namespace} value={o.namespace}>
+              <option key={o.namespace} value={o.namespace} disabled={!o.hasSchedule}>
                 {o.namespace}
                 {o.hasSchedule ? '' : ' (no schedule)'}
               </option>
             ))}
           </select>
         </div>
-        {selected && !selected.hasSchedule && (
+        {blocked && (
           <Alert variant="warning">
             <span className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <Ban className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 <span className="font-mono text-xs">{selected.namespace}</span> has no backup
-                Schedule — there is nothing to inherit the repository or pod security from, so this
-                job relies on K8up&apos;s global credentials and operator defaults, and may fail.
+                Schedule, so there is nothing to inherit the repository or pod security from — the
+                job would fail or hang. Create a Schedule for this namespace first.
               </span>
             </span>
           </Alert>
         )}
         <DialogFooter>
-          <Button variant="secondary" disabled={busy !== '' || !ns} onClick={() => run('check')}>
+          <Button
+            variant="secondary"
+            disabled={busy !== '' || !ns || blocked}
+            onClick={() => run('check')}
+          >
             {busy === 'check' ? 'Creating…' : 'Run check'}
           </Button>
-          <Button disabled={busy !== '' || !ns} onClick={() => run('backup')}>
+          <Button disabled={busy !== '' || !ns || blocked} onClick={() => run('backup')}>
             {busy === 'backup' ? 'Creating…' : 'Run backup'}
           </Button>
         </DialogFooter>

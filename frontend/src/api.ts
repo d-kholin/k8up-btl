@@ -356,6 +356,9 @@ export const api = {
     req<{ ok: boolean; channels: Record<string, string> }>('/api/v1/notify/test', {
       method: 'POST',
     }),
+  /** SSE endpoint streaming a K8up job's live console (use with EventSource). */
+  jobConsoleUrl: (kind: string, namespace: string, name: string) =>
+    `/api/v1/jobs/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`,
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>
     req<K8sObject>('/api/v1/backups', { method: 'POST', body: JSON.stringify({ namespace, spec }) }),
   createCheck: (namespace: string, spec: Record<string, unknown> = {}) =>

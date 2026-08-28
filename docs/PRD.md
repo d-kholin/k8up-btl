@@ -62,7 +62,9 @@ If the target workload has no Argo ownership markers, skip steps 2 and 6 entirel
 
 ### 5.6 Trigger ad-hoc actions
 - Trigger an on-demand `Backup` or `Check` from the GUI (creates the corresponding CR).
+- Only for namespaces that have a K8up `Schedule`: the ad-hoc spec inherits backend, podConfigRef and podSecurityContext from it, and without one the job either lands in the wrong repository or hangs with its pod rejected by Pod Security admission. The server refuses such requests (409) and the UI disables those namespaces.
 - No rate-limiting/cooldown required — a confirmation dialog before firing is sufficient protection against accidental repeats.
+- Every running job (ad-hoc or scheduled) exposes a live console from the active-jobs strip: streamed job pod logs over SSE, a best-effort restic progress bar parsed from percent output, and — when no pod exists — batch Job state plus warning events (e.g. the Pod Security `FailedCreate` reason).
 
 ### 5.7 Restore history / audit log
 - Retain restore history for 90 days (time-based retention, not count-based). Older entries can be pruned/archived by the backend on a schedule.

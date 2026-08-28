@@ -111,6 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/schedules", s.handleListSchedules)
 	mux.HandleFunc("GET /api/v1/snapshots", s.handleListSnapshots)
 	mux.HandleFunc("GET /api/v1/jobs", s.handleListJobs)
+	mux.HandleFunc("GET /api/v1/jobs/{kind}/{namespace}/{name}/logs", s.handleJobConsole)
 	mux.HandleFunc("GET /api/v1/restores", s.handleListRestores)
 	mux.HandleFunc("POST /api/v1/restores", s.handleStartRestore)
 	mux.HandleFunc("GET /api/v1/restores/{id}", s.handleGetRestore)
@@ -357,6 +358,65 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		out[n.name] = results[i]
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleJobConsole streams the live console of one K8up job CR over SSE: its
+// pod's log lines as they happen, "note" lines while no pod exists (the
+// stuck-job diagnostic), and a terminal "done" event. Data-only messages, one
+// JSON k8s.JobConsoleEvent per message.
+func (s *Server) handleJobConsole(w http.ResponseWriter, r *http.Request) {
+	kind := strings.ToLower(r.PathValue("kind"))
+	namespace := r.PathValue("namespace")
+	name := r.PathValue("name")
+	if _, ok := k8s.ConsoleGVRs[kind]; !ok {
+		http.Error(w, "unknown job kind", http.StatusBadRequest)
+		return
+	}
+	if s.K8s == nil {
+		http.Error(w, "kubernetes client not configured", http.StatusServiceUnavailable)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "sse unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// StreamJobConsole blocks in this goroutine; the ping ticker keeps proxies
+	// from dropping the connection through quiet stretches of a long restic run.
+	var mu sync.Mutex
+	writeRaw := func(raw string) {
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = fmt.Fprint(w, raw)
+		flusher.Flush()
+	}
+	writeRaw("event: ready\ndata: {}\n\n")
+	pingCtx, cancelPing := context.WithCancel(r.Context())
+	defer cancelPing()
+	go func() {
+		t := time.NewTicker(25 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-t.C:
+				writeRaw(": ping\n\n")
+			}
+		}
+	}()
+
+	s.K8s.StreamJobConsole(r.Context(), kind, namespace, name, func(ev k8s.JobConsoleEvent) {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		writeRaw(fmt.Sprintf("data: %s\n\n", b))
+	})
 }
 
 func (s *Server) handleListRestores(w http.ResponseWriter, _ *http.Request) {
@@ -660,7 +720,21 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request, kind string, 
 	if len(body.Spec) == 0 {
 		// A bare spec fails Pod Security admission in restricted namespaces and
 		// lands in the operator-default repository when the backend is declared
-		// on the Schedule — inherit both, like the scheduled jobs.
+		// on the Schedule — inherit both, like the scheduled jobs. Without a
+		// Schedule there is nothing to inherit and the job either targets the
+		// wrong repository or hangs with its pod rejected by admission, so
+		// refuse outright. (An explicit caller-supplied spec bypasses this.)
+		ok, err := s.K8s.HasSchedule(r.Context(), body.Namespace)
+		if err != nil {
+			s.writeErr(w, err, http.StatusBadGateway)
+			return
+		}
+		if !ok {
+			http.Error(w, fmt.Sprintf(
+				"namespace %q has no K8up Schedule: ad-hoc %s jobs inherit their repository and pod security from the Schedule and cannot run without one",
+				body.Namespace, strings.ToLower(kind)), http.StatusConflict)
+			return
+		}
 		body.Spec = s.K8s.ResolveJobSpec(r.Context(), body.Namespace, strings.ToLower(kind))
 	}
 	obj, err := s.K8s.CreateSimpleJobCR(r.Context(), gvr, kind, body.Namespace, body.Name, body.Spec)

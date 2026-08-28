@@ -54,6 +54,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # The live job console surfaces the batch Job's warning events (e.g. a
+  # FailedCreate from Pod Security admission) when a job never produces a pod.
+  # Best-effort: the console still streams logs without this grant.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]

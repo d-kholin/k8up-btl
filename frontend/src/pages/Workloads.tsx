@@ -6,6 +6,7 @@ import { flattenLiveJobs, type LiveJob } from '../lib/jobs'
 import { snapTime } from '../lib/snapshots'
 import { cronIntervalMs, formatAge, formatBytes, formatWhen } from '../lib/utils'
 import ActiveJobs from '../components/ActiveJobs'
+import JobConsole from '../components/JobConsole'
 import RunBackupDialog, { type NamespaceOption } from '../components/RunBackupDialog'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -41,6 +42,8 @@ export default function Workloads() {
   const [filter, setFilter] = useState('')
   const [dialogNs, setDialogNs] = useState<string | undefined>()
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [consoleJob, setConsoleJob] = useState<LiveJob | null>(null)
+  const [consoleOpen, setConsoleOpen] = useState(false)
 
   const loadJobs = () =>
     api
@@ -197,11 +200,22 @@ export default function Workloads() {
   }
 
   const onCreated = (kind: 'backup' | 'check', namespace: string, name: string) => {
+    const job: LiveJob = {
+      kind,
+      namespace,
+      name,
+      createdAt: new Date().toISOString(),
+      finished: false,
+      failed: false,
+    }
     setPending((prev) => [
       ...prev.filter((p) => Date.now() - new Date(p.createdAt || 0).getTime() < 5 * 60000),
-      { kind, namespace, name, createdAt: new Date().toISOString(), finished: false, failed: false },
+      job,
     ])
     loadJobs()
+    // Drop straight into the live console so the new job's progress is visible.
+    setConsoleJob(job)
+    setConsoleOpen(true)
   }
 
   return (
@@ -219,7 +233,13 @@ export default function Workloads() {
       </div>
       {error && <Alert variant="danger">{error}</Alert>}
 
-      <ActiveJobs jobs={activeJobs} />
+      <ActiveJobs
+        jobs={activeJobs}
+        onSelect={(j) => {
+          setConsoleJob(j)
+          setConsoleOpen(true)
+        }}
+      />
 
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
@@ -293,6 +313,20 @@ export default function Workloads() {
         options={options}
         initialNamespace={dialogNs}
         onCreated={onCreated}
+      />
+
+      <JobConsole
+        job={
+          consoleJob &&
+          (activeJobs.find(
+            (j) =>
+              j.kind === consoleJob.kind &&
+              j.namespace === consoleJob.namespace &&
+              j.name === consoleJob.name,
+          ) ?? consoleJob)
+        }
+        open={consoleOpen}
+        onOpenChange={setConsoleOpen}
       />
     </div>
   )

@@ -6,6 +6,7 @@ import { flattenLiveJobs, type LiveJob } from '../lib/jobs'
 import { isSqlDump, snapSpec, snapTime, sourcePvcCandidates, workloadFromPaths } from '../lib/snapshots'
 import { formatAge, formatBytes, formatWhen } from '../lib/utils'
 import ActiveJobs from '../components/ActiveJobs'
+import JobConsole from '../components/JobConsole'
 import RunBackupDialog from '../components/RunBackupDialog'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -39,6 +40,8 @@ export default function WorkloadDetail() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [consoleJob, setConsoleJob] = useState<LiveJob | null>(null)
+  const [consoleOpen, setConsoleOpen] = useState(false)
 
   const loadJobs = () =>
     api
@@ -166,7 +169,14 @@ export default function WorkloadDetail() {
       </div>
       {error && <Alert variant="danger">{error}</Alert>}
 
-      <ActiveJobs jobs={activeJobs} linkNamespace={false} />
+      <ActiveJobs
+        jobs={activeJobs}
+        linkNamespace={false}
+        onSelect={(j) => {
+          setConsoleJob(j)
+          setConsoleOpen(true)
+        }}
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -336,12 +346,37 @@ export default function WorkloadDetail() {
         options={[{ namespace: ns, hasSchedule: schedules.length > 0 }]}
         initialNamespace={ns}
         onCreated={(kind, namespace, name) => {
+          const job: LiveJob = {
+            kind,
+            namespace,
+            name,
+            createdAt: new Date().toISOString(),
+            finished: false,
+            failed: false,
+          }
           setPending((prev) => [
             ...prev.filter((p) => Date.now() - new Date(p.createdAt || 0).getTime() < 5 * 60000),
-            { kind, namespace, name, createdAt: new Date().toISOString(), finished: false, failed: false },
+            job,
           ])
           loadJobs()
+          // Drop straight into the live console so the new job's progress is visible.
+          setConsoleJob(job)
+          setConsoleOpen(true)
         }}
+      />
+
+      <JobConsole
+        job={
+          consoleJob &&
+          (activeJobs.find(
+            (j) =>
+              j.kind === consoleJob.kind &&
+              j.namespace === consoleJob.namespace &&
+              j.name === consoleJob.name,
+          ) ?? consoleJob)
+        }
+        open={consoleOpen}
+        onOpenChange={setConsoleOpen}
       />
     </div>
   )
