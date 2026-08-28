@@ -101,7 +101,7 @@ export default function Restores() {
   const lines = selectedId ? logs[selectedId] || [] : []
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+    <div className="flex flex-col gap-4 lg:h-full lg:min-h-0 lg:overflow-hidden">
       <div className="shrink-0">
         <h1 className="text-2xl font-semibold tracking-tight">Restore operations</h1>
         <p className="text-sm text-muted-foreground">
@@ -114,13 +114,13 @@ export default function Restores() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-5 lg:items-stretch">
-        <Card className="flex min-h-0 flex-col overflow-hidden lg:col-span-2">
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-5 lg:items-stretch lg:overflow-hidden">
+        <Card className="flex flex-col lg:col-span-2 lg:min-h-0 lg:overflow-hidden">
           <CardHeader className="shrink-0">
             <CardTitle>Jobs</CardTitle>
             <CardDescription>Select a restore to view logs</CardDescription>
           </CardHeader>
-          <CardContent className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <CardContent className="max-h-72 overflow-y-auto overscroll-contain lg:max-h-none lg:min-h-0 lg:flex-1">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -175,7 +175,7 @@ export default function Restores() {
           </CardContent>
         </Card>
 
-        <Card className="flex min-h-0 flex-col overflow-hidden lg:col-span-3">
+        <Card className="flex flex-col lg:col-span-3 lg:min-h-0 lg:overflow-hidden">
           <CardHeader className="flex shrink-0 flex-row flex-wrap items-start justify-between gap-2 space-y-0">
             <div>
               <CardTitle>Live log</CardTitle>
@@ -229,7 +229,7 @@ export default function Restores() {
               )}
             </div>
           </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <CardContent className="flex flex-col lg:min-h-0 lg:flex-1 lg:overflow-hidden">
             {selected?.lastError && (
               <Alert variant="danger" className="mb-3 shrink-0">
                 {selected.lastError}
@@ -253,7 +253,7 @@ export default function Restores() {
               )}
             {/* Independent scrollport: fills remaining card height; does not grow the page */}
             <div
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none]"
+              className="h-[55dvh] overflow-y-auto overscroll-contain rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none] lg:h-auto lg:min-h-0 lg:flex-1"
               onWheel={(e) => {
                 // Keep wheel inside this pane even when main/page would otherwise chain-scroll.
                 e.stopPropagation()

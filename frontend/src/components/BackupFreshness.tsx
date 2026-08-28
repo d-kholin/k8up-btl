@@ -137,8 +137,8 @@ export default function BackupFreshness({
             <TableHeader>
               <TableRow>
                 <TableHead>Namespace</TableHead>
-                <TableHead>Cadence</TableHead>
-                <TableHead>Last backup</TableHead>
+                <TableHead className="hidden md:table-cell">Cadence</TableHead>
+                <TableHead className="hidden sm:table-cell">Last backup</TableHead>
                 <TableHead>Age</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
@@ -154,8 +154,8 @@ export default function BackupFreshness({
                       {r.namespace}
                     </Link>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{r.cron || '—'}</TableCell>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                  <TableCell className="hidden font-mono text-xs md:table-cell">{r.cron || '—'}</TableCell>
+                  <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
                     {formatWhen(r.lastBackup)}
                   </TableCell>
                   <TableCell className="text-xs">{r.ageMs != null ? formatAge(r.ageMs) : '—'}</TableCell>

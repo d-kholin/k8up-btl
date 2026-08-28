@@ -1,15 +1,18 @@
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useEffect, useState, type ReactNode } from 'react'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   DatabaseBackup,
   HardDrive,
   History,
   Layers3,
+  Menu,
   Moon,
   ScrollText,
   Settings as SettingsIcon,
   Sun,
   WifiOff,
+  X,
 } from 'lucide-react'
 import { api, type ClusterStatus, type User } from './api'
 import { cn } from './lib/utils'
@@ -34,7 +37,87 @@ const nav = [
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ]
 
-/** Scrollable pages vs lock-to-viewport (Restores log console). */
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <nav className="flex flex-1 flex-col gap-1">
+      {nav.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            cn(
+              'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-row-hover hover:text-row-hover-foreground',
+              isActive && 'bg-accent font-medium text-accent-foreground',
+            )
+          }
+        >
+          <item.icon className="h-4 w-4" />
+          {item.label}
+        </NavLink>
+      ))}
+    </nav>
+  )
+}
+
+function ThemeToggle() {
+  const { theme, toggle } = useTheme()
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      className="h-8 w-8 shrink-0"
+      onClick={toggle}
+      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </Button>
+  )
+}
+
+/** Mobile slide-over nav (Radix dialog for focus trap / escape / scroll lock). */
+function MobileNav({
+  open,
+  onOpenChange,
+  user,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  user: User | null
+}) {
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm md:hidden" />
+        <DialogPrimitive.Content
+          aria-describedby={undefined}
+          className="fixed inset-y-0 left-0 z-50 flex w-64 max-w-[80vw] flex-col border-r bg-card px-3 py-5 shadow-lg md:hidden"
+        >
+          <div className="mb-6 flex items-center justify-between px-2">
+            <DialogPrimitive.Title className="text-sm font-semibold tracking-wide">
+              k8up btl
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Close asChild>
+              <Button type="button" size="icon" variant="ghost" className="h-8 w-8">
+                <X className="h-4 w-4" />
+                <span className="sr-only">Close menu</span>
+              </Button>
+            </DialogPrimitive.Close>
+          </div>
+          <NavLinks onNavigate={() => onOpenChange(false)} />
+          <div className="mt-4 border-t px-2 pt-3 text-xs text-muted-foreground">
+            {user?.username || '…'}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  )
+}
+
+/** Scrollable pages vs lock-to-viewport (Restores log console — desktop only;
+ * on small screens fill-mode pages scroll like everything else). */
 function PageShell({
   children,
   mode = 'scroll',
@@ -46,7 +129,9 @@ function PageShell({
     <div
       className={cn(
         'min-h-0 w-full flex-1',
-        mode === 'scroll' ? 'overflow-y-auto overflow-x-hidden' : 'flex flex-col overflow-hidden',
+        mode === 'scroll'
+          ? 'overflow-y-auto overflow-x-hidden'
+          : 'flex flex-col overflow-y-auto overflow-x-hidden lg:overflow-hidden',
       )}
     >
       {children}
@@ -58,11 +143,17 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [err, setErr] = useState('')
   const [cluster, setCluster] = useState<ClusterStatus | null>(null)
-  const { theme, toggle } = useTheme()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const location = useLocation()
 
   useEffect(() => {
     api.me().then(setUser).catch((e: Error) => setErr(e.message))
   }, [])
+
+  // Belt-and-braces: close the drawer on any route change (back button etc.).
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [location.pathname])
 
   // Surface degraded mode: without this, a dead cluster connection renders as
   // "no snapshots" everywhere.
@@ -78,46 +169,41 @@ export default function App() {
   }, [])
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
-      <aside className="flex w-56 shrink-0 flex-col border-r bg-card/40 px-3 py-5">
-        <div className="mb-6 flex items-start justify-between gap-2 px-2">
-          <div>
-            <div className="text-sm font-semibold tracking-wide">k8up btl</div>
-          </div>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">
+      {/* Mobile top bar */}
+      <header className="flex shrink-0 items-center justify-between border-b bg-card/40 px-3 py-2 md:hidden">
+        <div className="flex items-center gap-1">
           <Button
             type="button"
             size="icon"
             variant="ghost"
-            className="h-8 w-8 shrink-0"
-            onClick={toggle}
-            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="h-9 w-9"
+            onClick={() => setMenuOpen(true)}
           >
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            <Menu className="h-5 w-5" />
+            <span className="sr-only">Open menu</span>
           </Button>
+          <span className="text-sm font-semibold tracking-wide">k8up btl</span>
         </div>
-        <nav className="flex flex-1 flex-col gap-1">
-          {nav.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-row-hover hover:text-row-hover-foreground',
-                  isActive && 'bg-accent font-medium text-accent-foreground',
-                )
-              }
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
+        <ThemeToggle />
+      </header>
+      <MobileNav open={menuOpen} onOpenChange={setMenuOpen} user={user} />
+
+      {/* Desktop sidebar */}
+      <aside className="hidden w-56 shrink-0 flex-col border-r bg-card/40 px-3 py-5 md:flex">
+        <div className="mb-6 flex items-start justify-between gap-2 px-2">
+          <div>
+            <div className="text-sm font-semibold tracking-wide">k8up btl</div>
+          </div>
+          <ThemeToggle />
+        </div>
+        <NavLinks />
         <div className="mt-4 border-t px-2 pt-3 text-xs text-muted-foreground">
           {user?.username || '…'}
         </div>
       </aside>
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-6 md:p-8">
+
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 md:p-8">
         <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col">
           {cluster && !cluster.connected && (
             <div className="mb-4 shrink-0">

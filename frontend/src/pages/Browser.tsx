@@ -306,7 +306,7 @@ export default function Browser() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead className="w-24">Type</TableHead>
+                <TableHead className="hidden w-24 sm:table-cell">Type</TableHead>
                 <TableHead className="w-28">Size</TableHead>
                 <TableHead className="w-36" />
               </TableRow>
@@ -319,7 +319,7 @@ export default function Browser() {
                     <TableCell>
                       <div className="h-4 w-48 rounded bg-muted" />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <div className="h-4 w-12 rounded bg-muted" />
                     </TableCell>
                     <TableCell>
@@ -343,7 +343,7 @@ export default function Browser() {
                       ..
                     </span>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">dir</TableCell>
+                  <TableCell className="hidden text-muted-foreground sm:table-cell">dir</TableCell>
                   <TableCell />
                   <TableCell />
                 </TableRow>
@@ -371,7 +371,7 @@ export default function Browser() {
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{n.type || '—'}</TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">{n.type || '—'}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {isDir ? '—' : formatBytes(n.size)}
                     </TableCell>

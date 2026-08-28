@@ -274,7 +274,7 @@ export default function Dashboard() {
         </Alert>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           title="Restore points"
           value={loading ? '…' : String(stats.restorePts)}
@@ -371,11 +371,11 @@ export default function Dashboard() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Namespace</TableHead>
-                  <TableHead>Snaps</TableHead>
+                  <TableHead className="hidden sm:table-cell">Snaps</TableHead>
                   <TableHead>Logical</TableHead>
                   <TableHead>Stored</TableHead>
-                  <TableHead>Dedup</TableHead>
-                  <TableHead>Repo</TableHead>
+                  <TableHead className="hidden sm:table-cell">Dedup</TableHead>
+                  <TableHead className="hidden lg:table-cell">Repo</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -384,10 +384,10 @@ export default function Dashboard() {
                   .map((r) => (
                     <TableRow key={r.namespace}>
                       <TableCell className="font-mono text-xs">{r.namespace}</TableCell>
-                      <TableCell>{r.snapshotCount}</TableCell>
+                      <TableCell className="hidden sm:table-cell">{r.snapshotCount}</TableCell>
                       <TableCell>{formatBytes(r.logicalBytes)}</TableCell>
                       <TableCell>{formatBytes(r.storedBytes)}</TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         {r.error ? (
                           <span className="text-xs text-red-700 dark:text-red-500" title={r.error}>
                             error
@@ -396,7 +396,7 @@ export default function Dashboard() {
                           `${Math.round((r.dedupRatio || 0) * 100)}%`
                         )}
                       </TableCell>
-                      <TableCell className="max-w-[180px] truncate font-mono text-[11px] text-muted-foreground">
+                      <TableCell className="hidden max-w-[180px] truncate font-mono text-[11px] text-muted-foreground lg:table-cell">
                         {r.repository}
                       </TableCell>
                     </TableRow>
@@ -571,8 +571,8 @@ export default function Dashboard() {
             <TableHeader>
               <TableRow>
                 <TableHead>Namespace</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Backup cron</TableHead>
+                <TableHead className="hidden sm:table-cell">Name</TableHead>
+                <TableHead className="hidden md:table-cell">Backup cron</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead />
               </TableRow>
@@ -588,8 +588,8 @@ export default function Dashboard() {
                       {s.namespace}
                     </Link>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{s.name}</TableCell>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className="hidden font-mono text-xs sm:table-cell">{s.name}</TableCell>
+                  <TableCell className="hidden font-mono text-xs md:table-cell">
                     {String(
                       (s.spec as { backup?: { schedule?: string } })?.backup?.schedule ?? '—',
                     )}

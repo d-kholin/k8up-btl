@@ -160,7 +160,7 @@ export default function Snapshots() {
           <Card key={g.namespace}>
             <button
               type="button"
-              className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-row-hover"
+              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-row-hover sm:px-5 sm:py-4"
               onClick={() => setExpanded((e) => ({ ...e, [g.namespace]: !open }))}
             >
               {open ? (
@@ -185,7 +185,7 @@ export default function Snapshots() {
                     <TableRow>
                       <TableHead>When</TableHead>
                       <TableHead>Snapshot</TableHead>
-                      <TableHead>Workload / paths</TableHead>
+                      <TableHead className="hidden md:table-cell">Workload / paths</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -205,7 +205,7 @@ export default function Snapshots() {
                               </div>
                             )}
                           </TableCell>
-                          <TableCell className="max-w-[240px] truncate font-mono text-xs text-muted-foreground">
+                          <TableCell className="hidden max-w-[240px] truncate font-mono text-xs text-muted-foreground md:table-cell">
                             {workloadFromPaths(spec.paths || [])}
                           </TableCell>
                           <TableCell className="text-right">
@@ -216,13 +216,16 @@ export default function Snapshots() {
                                   title="Compare with a previous snapshot"
                                 >
                                   <GitCompareArrows className="h-3.5 w-3.5" />
-                                  Compare
+                                  <span className="hidden sm:inline">Compare</span>
                                 </Link>
                               </Button>
                               <Button asChild size="sm" variant="ghost">
-                                <Link to={`/snapshots/${s.namespace}/${s.name}/browse`}>
+                                <Link
+                                  to={`/snapshots/${s.namespace}/${s.name}/browse`}
+                                  title="Browse files"
+                                >
                                   <FolderSearch className="h-3.5 w-3.5" />
-                                  Browse
+                                  <span className="hidden sm:inline">Browse</span>
                                 </Link>
                               </Button>
                               {isSqlDump(s) ? (

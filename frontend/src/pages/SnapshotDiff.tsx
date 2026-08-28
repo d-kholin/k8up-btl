@@ -194,7 +194,7 @@ export default function SnapshotDiffPage() {
 
       {diff && !loading && (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <div className="rounded-lg border border-border bg-card p-3">
               <div className="text-xs text-muted-foreground">Added</div>
               <div className="text-lg font-semibold text-emerald-700 dark:text-emerald-400">

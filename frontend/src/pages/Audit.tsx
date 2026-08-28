@@ -129,8 +129,8 @@ export default function Audit() {
               <TableRow>
                 <TableHead>When</TableHead>
                 <TableHead>Kind</TableHead>
-                <TableHead>Actor</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="hidden md:table-cell">Actor</TableHead>
+                <TableHead className="hidden sm:table-cell">Status</TableHead>
                 <TableHead>Detail</TableHead>
               </TableRow>
             </TableHeader>
@@ -143,8 +143,8 @@ export default function Audit() {
                   <TableCell>
                     <Badge variant="secondary">{e.kind}</Badge>
                   </TableCell>
-                  <TableCell>{e.actor}</TableCell>
-                  <TableCell>{e.status || '—'}</TableCell>
+                  <TableCell className="hidden md:table-cell">{e.actor}</TableCell>
+                  <TableCell className="hidden sm:table-cell">{e.status || '—'}</TableCell>
                   <TableCell className="max-w-md truncate font-mono text-xs text-muted-foreground">
                     {[e.namespace, e.pvc, e.snapshot?.slice(0, 12), e.path, e.argoApp, e.detail]
                       .filter(Boolean)

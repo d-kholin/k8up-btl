@@ -291,11 +291,11 @@ export default function BackupActivity({
                 <TableHeader>
                   <TableRow>
                     <TableHead>Time</TableHead>
-                    <TableHead>Kind</TableHead>
+                    <TableHead className="hidden sm:table-cell">Kind</TableHead>
                     <TableHead>Job</TableHead>
-                    <TableHead>Schedule</TableHead>
+                    <TableHead className="hidden lg:table-cell">Schedule</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Message</TableHead>
+                    <TableHead className="hidden md:table-cell">Message</TableHead>
                     <TableHead className="text-right">Restore point</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -309,7 +309,7 @@ export default function BackupActivity({
                           <TableCell className="whitespace-nowrap text-xs">
                             {new Date(e.startedAt).toLocaleTimeString()}
                           </TableCell>
-                          <TableCell className="text-xs">{e.kind}</TableCell>
+                          <TableCell className="hidden text-xs sm:table-cell">{e.kind}</TableCell>
                           <TableCell className="font-mono text-xs">
                             <Link
                               to={`/jobs?namespace=${encodeURIComponent(e.namespace)}`}
@@ -319,7 +319,7 @@ export default function BackupActivity({
                               {e.namespace}/{e.name}
                             </Link>
                           </TableCell>
-                          <TableCell className="font-mono text-xs">{e.schedule || '—'}</TableCell>
+                          <TableCell className="hidden font-mono text-xs lg:table-cell">{e.schedule || '—'}</TableCell>
                           <TableCell>
                             <Badge
                               variant={
@@ -335,7 +335,7 @@ export default function BackupActivity({
                               {e.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="max-w-[280px] truncate text-xs text-muted-foreground" title={e.message}>
+                          <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell" title={e.message}>
                             {e.message || '—'}
                           </TableCell>
                           <TableCell className="text-right">
@@ -350,9 +350,9 @@ export default function BackupActivity({
                                       {workloadFromPaths(snapSpec(s).paths || [])}
                                     </span>
                                     <Button asChild size="sm" variant="ghost">
-                                      <Link to={`/snapshots/${s.namespace}/${s.name}/browse`}>
+                                      <Link to={`/snapshots/${s.namespace}/${s.name}/browse`} title="Browse files">
                                         <FolderSearch className="h-3.5 w-3.5" />
-                                        Browse
+                                        <span className="hidden sm:inline">Browse</span>
                                       </Link>
                                     </Button>
                                     {isSqlDump(s) ? (
