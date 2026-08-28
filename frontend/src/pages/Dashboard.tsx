@@ -466,7 +466,7 @@ export default function Dashboard() {
             <Row label="Prunes" value={stats.prunes} />
             <div className="pt-2">
               <Button asChild variant="outline" size="sm" className="w-full">
-                <Link to="/jobs">Manage jobs</Link>
+                <Link to="/workloads">Workloads</Link>
               </Button>
             </div>
           </CardContent>
@@ -601,7 +601,7 @@ export default function Dashboard() {
                   </TableCell>
                   <TableCell className="text-right">
                     <Button asChild variant="link" size="sm">
-                      <Link to={`/jobs?namespace=${encodeURIComponent(s.namespace || '')}`}>Runs</Link>
+                      <Link to={`/workloads/${encodeURIComponent(s.namespace || '')}`}>Runs</Link>
                     </Button>
                   </TableCell>
                 </TableRow>

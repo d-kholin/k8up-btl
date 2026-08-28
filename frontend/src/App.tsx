@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import { useEffect, useState, type ReactNode } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
@@ -19,7 +19,8 @@ import { cn } from './lib/utils'
 import { useTheme } from './theme'
 import Dashboard from './pages/Dashboard'
 import Snapshots from './pages/Snapshots'
-import Jobs from './pages/Jobs'
+import Workloads from './pages/Workloads'
+import WorkloadDetail from './pages/WorkloadDetail'
 import Restores from './pages/Restores'
 import Audit from './pages/Audit'
 import Browser from './pages/Browser'
@@ -31,7 +32,7 @@ import { Button } from './components/ui/button'
 const nav = [
   { to: '/', label: 'Dashboard', icon: Layers3, end: true },
   { to: '/snapshots', label: 'Snapshots', icon: HardDrive },
-  { to: '/jobs', label: 'Jobs', icon: DatabaseBackup },
+  { to: '/workloads', label: 'Workloads', icon: DatabaseBackup },
   { to: '/restores', label: 'Restores', icon: History },
   { to: '/audit', label: 'Audit', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
@@ -137,6 +138,12 @@ function PageShell({
       {children}
     </div>
   )
+}
+
+function LegacyJobsRedirect() {
+  const [params] = useSearchParams()
+  const ns = params.get('namespace')
+  return <Navigate to={ns ? `/workloads/${encodeURIComponent(ns)}` : '/workloads'} replace />
 }
 
 export default function App() {
@@ -257,13 +264,23 @@ export default function App() {
               }
             />
             <Route
-              path="/jobs"
+              path="/workloads"
               element={
                 <PageShell>
-                  <Jobs />
+                  <Workloads />
                 </PageShell>
               }
             />
+            <Route
+              path="/workloads/:ns"
+              element={
+                <PageShell>
+                  <WorkloadDetail />
+                </PageShell>
+              }
+            />
+            {/* Pre-Workloads deep links (dashboard bookmarks, notifications). */}
+            <Route path="/jobs" element={<LegacyJobsRedirect />} />
             <Route
               path="/restores"
               element={

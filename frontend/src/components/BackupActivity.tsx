@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FolderSearch } from 'lucide-react'
+import { ChevronDown, FolderSearch } from 'lucide-react'
 import type { BackupEvent, K8sObject } from '../api'
 import { cn } from '../lib/utils'
 import { isSqlDump, snapSpec, workloadFromPaths } from '../lib/snapshots'
@@ -84,6 +84,7 @@ export default function BackupActivity({
   const [restoreSnap, setRestoreSnap] = useState<K8sObject | null>(null)
   const [recoverSnap, setRecoverSnap] = useState<K8sObject | null>(null)
   const [hover, setHover] = useState<{ key: string; label: string; x: number; y: number } | null>(null)
+  const [expandedUid, setExpandedUid] = useState<string | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -304,36 +305,57 @@ export default function BackupActivity({
                     .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())
                     .map((e) => {
                       const snaps = matchSnapshots(e, snapshots)
+                      const badge = (
+                        <Badge
+                          variant={
+                            e.status === 'succeeded'
+                              ? 'success'
+                              : e.status === 'failed'
+                                ? 'danger'
+                                : e.status === 'running'
+                                  ? 'secondary'
+                                  : 'warning'
+                          }
+                        >
+                          {e.status}
+                        </Badge>
+                      )
                       return (
-                        <TableRow key={e.uid}>
+                        <Fragment key={e.uid}>
+                        <TableRow>
                           <TableCell className="whitespace-nowrap text-xs">
                             {new Date(e.startedAt).toLocaleTimeString()}
                           </TableCell>
                           <TableCell className="hidden text-xs sm:table-cell">{e.kind}</TableCell>
                           <TableCell className="font-mono text-xs">
                             <Link
-                              to={`/jobs?namespace=${encodeURIComponent(e.namespace)}`}
+                              to={`/workloads/${encodeURIComponent(e.namespace)}`}
                               className="hover:underline"
-                              title="Open in Jobs"
+                              title="Open workload"
                             >
                               {e.namespace}/{e.name}
                             </Link>
                           </TableCell>
                           <TableCell className="hidden font-mono text-xs lg:table-cell">{e.schedule || '—'}</TableCell>
                           <TableCell>
-                            <Badge
-                              variant={
-                                e.status === 'succeeded'
-                                  ? 'success'
-                                  : e.status === 'failed'
-                                    ? 'danger'
-                                    : e.status === 'running'
-                                      ? 'secondary'
-                                      : 'warning'
-                              }
-                            >
-                              {e.status}
-                            </Badge>
+                            {e.detail ? (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedUid(expandedUid === e.uid ? null : e.uid)}
+                                title="Show failure detail (pod logs, exit reason)"
+                                className="inline-flex items-center gap-1"
+                              >
+                                {badge}
+                                <ChevronDown
+                                  className={cn(
+                                    'h-3 w-3 text-muted-foreground transition-transform',
+                                    expandedUid === e.uid && 'rotate-180',
+                                  )}
+                                />
+                              </button>
+                            ) : (
+                              badge
+                            )}
                           </TableCell>
                           <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell" title={e.message}>
                             {e.message || '—'}
@@ -374,6 +396,16 @@ export default function BackupActivity({
                             )}
                           </TableCell>
                         </TableRow>
+                        {e.detail && expandedUid === e.uid && (
+                          <TableRow>
+                            <TableCell colSpan={7} className="bg-muted/40">
+                              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                                {e.detail}
+                              </pre>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        </Fragment>
                       )
                     })}
                 </TableBody>

@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/d-kholin/k8up-gui/internal/api"
 	"github.com/d-kholin/k8up-gui/internal/audit"
 	"github.com/d-kholin/k8up-gui/internal/config"
@@ -150,6 +152,12 @@ func main() {
 			Log:      log,
 			Interval: cfg.HistoryPollInterval,
 			OnEvent:  srv.BroadcastBackupEvent,
+		}
+		rec.CaptureFailureDetail = func(ctx context.Context, e audit.BackupEvent) string {
+			// Bounded so one slow log fetch can't stall the whole sweep.
+			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			return clients.CaptureJobFailureDetail(cctx, e.Kind, e.Namespace, e.Name, types.UID(e.UID))
 		}
 		rec.OnTransition = func(e audit.BackupEvent) {
 			// GUI-orchestrated Restore CR failures already alert via the

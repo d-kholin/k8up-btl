@@ -23,12 +23,22 @@ func JobFailureEvent(e audit.BackupEvent) Event {
 	if e.Message != "" {
 		fmt.Fprintf(&b, "\n%s\n", e.Message)
 	}
+	if e.Detail != "" {
+		fmt.Fprintf(&b, "\n%s\n", truncateBody(e.Detail, 1500))
+	}
 	return Event{
 		Title:    title,
 		Body:     b.String(),
 		Severity: SeverityFailure,
 		Tags:     []string{strings.ToLower(e.Kind), e.Namespace},
 	}
+}
+
+func truncateBody(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n… (truncated — full detail in the GUI)"
 }
 
 // RestoreOutcomeEvent formats a GUI-orchestrated restore reaching a terminal

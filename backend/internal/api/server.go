@@ -653,12 +653,15 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request, kind string, 
 	if body.Name == "" {
 		body.Name = fmt.Sprintf("gui-%s-%s", strings.ToLower(kind), uuid.NewString()[:8])
 	}
-	if body.Spec == nil {
-		body.Spec = map[string]any{}
-	}
 	if s.K8s == nil {
 		http.Error(w, "kubernetes client not configured", http.StatusServiceUnavailable)
 		return
+	}
+	if len(body.Spec) == 0 {
+		// A bare spec fails Pod Security admission in restricted namespaces and
+		// lands in the operator-default repository when the backend is declared
+		// on the Schedule — inherit both, like the scheduled jobs.
+		body.Spec = s.K8s.ResolveJobSpec(r.Context(), body.Namespace, strings.ToLower(kind))
 	}
 	obj, err := s.K8s.CreateSimpleJobCR(r.Context(), gvr, kind, body.Namespace, body.Name, body.Spec)
 	if err != nil {

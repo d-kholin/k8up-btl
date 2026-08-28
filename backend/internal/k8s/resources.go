@@ -594,21 +594,27 @@ func (c *Clients) DeleteBackup(ctx context.Context, ns, name string) error {
         return c.Dynamic.Resource(GVRBackup).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &fg})
 }
 
-// ResolveBackupSpec builds the spec for a one-shot Backup from the namespace's
-// Schedule so it lands in the same repository and passes the same Pod Security
-// admission as the scheduled backups: backend, podConfigRef and
-// podSecurityContext are inherited (spec.backup.* wins over spec.*). Fields
+// ResolveJobSpec builds the spec for a one-shot job CR (Backup, Check, …) from
+// the namespace's Schedule so it lands in the same repository and passes the
+// same Pod Security admission as the scheduled jobs: backend, podConfigRef and
+// podSecurityContext are inherited (spec.<section>.* wins over spec.*). Fields
 // that cannot be resolved are omitted — K8up then falls back to its operator
-// defaults, same as a bare Backup.
-func (c *Clients) ResolveBackupSpec(ctx context.Context, namespace string) map[string]any {
+// defaults, same as a bare CR.
+func (c *Clients) ResolveJobSpec(ctx context.Context, namespace, section string) map[string]any {
         spec := map[string]any{}
         if be, err := c.ResolveRestoreBackend(ctx, namespace, ""); err == nil && be != nil {
                 spec["backend"] = be
         }
-        for k, v := range c.resolveSchedulePodFields(ctx, namespace, "backup") {
+        for k, v := range c.resolveSchedulePodFields(ctx, namespace, section) {
                 spec[k] = v
         }
         return spec
+}
+
+// ResolveBackupSpec is ResolveJobSpec for Backup CRs (used by the SQL-recovery
+// safety backup).
+func (c *Clients) ResolveBackupSpec(ctx context.Context, namespace string) map[string]any {
+        return c.ResolveJobSpec(ctx, namespace, "backup")
 }
 
 // resolveSchedulePodFields returns podConfigRef/podSecurityContext inherited

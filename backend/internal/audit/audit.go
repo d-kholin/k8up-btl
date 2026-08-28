@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS backup_events (
   schedule TEXT,
   status TEXT NOT NULL,
   message TEXT,
+  detail TEXT,
   started_at TEXT NOT NULL,
   finished_at TEXT,
   updated_at TEXT NOT NULL
@@ -106,7 +107,16 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at TEXT NOT NULL
 );
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	// Additive migration: databases created before the failure-detail capture
+	// lack the detail column (CREATE TABLE IF NOT EXISTS won't add it).
+	if _, err := s.db.Exec(`ALTER TABLE backup_events ADD COLUMN detail TEXT`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Insert(ctx context.Context, e Entry) (int64, error) {

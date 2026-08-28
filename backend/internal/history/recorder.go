@@ -28,6 +28,10 @@ type Recorder struct {
 	// backend restart never re-fires for jobs that finished long ago. Used for
 	// notifications.
 	OnTransition func(audit.BackupEvent)
+	// CaptureFailureDetail, when set, gathers pod-level failure context (batch
+	// Job condition, container exit reasons, log tail) the first time a job is
+	// observed failed. Must be prompt: pods are only fetched, never watched.
+	CaptureFailureDetail func(ctx context.Context, e audit.BackupEvent) string
 
 	seen map[string]string // "<kind>/<uid>" → last observed status
 	warm bool              // first sweep completed
@@ -80,6 +84,17 @@ func (r *Recorder) sweep(ctx context.Context) {
 			present = append(present, e.UID)
 			seenKey := k.kind + "/" + e.UID
 			presentKeys[seenKey] = struct{}{}
+			// Capture failure detail once per failed run, while the job's pods
+			// still exist. A restart re-observes old failures (seen is empty),
+			// so reuse the stored detail instead of re-fetching pod logs — and
+			// either way the detail rides along on the emitted event.
+			if e.Status == "failed" && r.seen[seenKey] != e.Status && r.CaptureFailureDetail != nil {
+				if existing, err := r.Store.GetBackupEventDetail(ctx, e.UID); err == nil && existing != "" {
+					e.Detail = existing
+				} else {
+					e.Detail = r.CaptureFailureDetail(ctx, e)
+				}
+			}
 			if err := r.Store.UpsertBackupEvent(ctx, e); err != nil {
 				r.Log.Warn("history sweep: upsert failed", "kind", k.kind, "name", e.Namespace+"/"+e.Name, "err", err)
 				continue

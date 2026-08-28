@@ -16,6 +16,9 @@ type BackupEvent struct {
 	Schedule   string     `json:"schedule,omitempty"`
 	Status     string     `json:"status"` // running | succeeded | failed | unknown
 	Message    string     `json:"message,omitempty"`
+	// Detail is pod-level failure context captured when a job is first observed
+	// failed: batch Job condition, container exit reasons, and a log tail.
+	Detail     string     `json:"detail,omitempty"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 }
@@ -26,21 +29,38 @@ func (s *Store) UpsertBackupEvent(ctx context.Context, e BackupEvent) error {
 		fin = e.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	// finished_at is sticky: once a run is recorded as finished, later sweeps
-	// (which may see the CR again with the same conditions) never move it.
+	// finished_at and detail are sticky: once a run is recorded as finished /
+	// its failure detail captured, later sweeps (which may see the CR again
+	// with the same conditions but no detail) never clear them.
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO backup_events (uid, kind, namespace, name, schedule, status, message, started_at, finished_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO backup_events (uid, kind, namespace, name, schedule, status, message, detail, started_at, finished_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(uid) DO UPDATE SET
   status = excluded.status,
   message = excluded.message,
   schedule = excluded.schedule,
+  detail = COALESCE(excluded.detail, backup_events.detail),
   finished_at = COALESCE(backup_events.finished_at, excluded.finished_at),
   updated_at = excluded.updated_at`,
 		e.UID, e.Kind, e.Namespace, e.Name, nullStr(e.Schedule), e.Status, nullStr(e.Message),
-		e.StartedAt.UTC().Format(time.RFC3339Nano), fin, now,
+		nullStr(e.Detail), e.StartedAt.UTC().Format(time.RFC3339Nano), fin, now,
 	)
 	return err
+}
+
+// GetBackupEventDetail returns the stored failure detail for a run, or ""
+// when the row doesn't exist or has none. Lets the recorder skip re-capturing
+// pod logs for failures it already recorded (e.g. after a backend restart).
+func (s *Store) GetBackupEventDetail(ctx context.Context, uid string) (string, error) {
+	var detail sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT detail FROM backup_events WHERE uid = ?`, uid).Scan(&detail)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return detail.String, nil
 }
 
 // MarkVanishedRunning flags still-running events of a kind whose CR no longer
@@ -65,7 +85,7 @@ WHERE kind = ? AND status = 'running'`
 }
 
 func (s *Store) ListBackupEvents(ctx context.Context, since time.Time, kind string) ([]BackupEvent, error) {
-	q := `SELECT uid, kind, namespace, name, schedule, status, message, started_at, finished_at
+	q := `SELECT uid, kind, namespace, name, schedule, status, message, detail, started_at, finished_at
 FROM backup_events WHERE started_at >= ?`
 	args := []any{since.UTC().Format(time.RFC3339Nano)}
 	if kind != "" {
@@ -84,12 +104,13 @@ FROM backup_events WHERE started_at >= ?`
 	for rows.Next() {
 		var e BackupEvent
 		var started string
-		var schedule, message, finished sql.NullString
-		if err := rows.Scan(&e.UID, &e.Kind, &e.Namespace, &e.Name, &schedule, &e.Status, &message, &started, &finished); err != nil {
+		var schedule, message, detail, finished sql.NullString
+		if err := rows.Scan(&e.UID, &e.Kind, &e.Namespace, &e.Name, &schedule, &e.Status, &message, &detail, &started, &finished); err != nil {
 			return nil, err
 		}
 		e.Schedule = schedule.String
 		e.Message = message.String
+		e.Detail = detail.String
 		e.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
 		if finished.Valid {
 			if t, err := time.Parse(time.RFC3339Nano, finished.String); err == nil {

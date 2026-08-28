@@ -174,6 +174,8 @@ export type BackupEvent = {
   schedule?: string
   status: 'running' | 'succeeded' | 'failed' | 'unknown'
   message?: string
+  /** Pod-level failure context: job condition, container exit reasons, log tail. */
+  detail?: string
   startedAt: string
   finishedAt?: string
 }
