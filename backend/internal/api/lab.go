@@ -148,6 +148,33 @@ func (s *Server) handleLabExtend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// handleLabVerdict records the operator's pass/fail judgement plus note.
+func (s *Server) handleLabVerdict(w http.ResponseWriter, r *http.Request) {
+	if s.Lab == nil {
+		http.Error(w, "restore lab is not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	u, _ := auth.FromContext(r.Context())
+	var body struct {
+		Status string `json:"status"`
+		Note   string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if len(body.Note) > 2000 {
+		http.Error(w, "note too long (max 2000 chars)", http.StatusBadRequest)
+		return
+	}
+	st, err := s.Lab.SetVerdict(r.PathValue("id"), body.Status, body.Note, u.Username)
+	if err != nil {
+		s.writeErr(w, err, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 func (s *Server) handleLabLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	lines := []string{}

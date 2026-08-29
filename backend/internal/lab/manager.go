@@ -79,6 +79,14 @@ type State struct {
 	RestorePoint *time.Time `json:"restorePoint,omitempty"`
 	// CancelRequested is set when teardown aborts a provisioning run.
 	CancelRequested bool `json:"cancelRequested,omitempty"`
+	// Services are the connectable endpoints in the lab once it is ready.
+	Services []k8s.LabService `json:"services,omitempty"`
+	// Operator verdict on the restore test: "passed" or "failed", with a
+	// note — the human half of the drill evidence.
+	Verdict     string     `json:"verdict,omitempty"`
+	VerdictNote string     `json:"verdictNote,omitempty"`
+	VerdictBy   string     `json:"verdictBy,omitempty"`
+	VerdictAt   *time.Time `json:"verdictAt,omitempty"`
 }
 
 // Active reports whether the lab still occupies the single-lab slot: only a
@@ -313,6 +321,60 @@ func (m *Manager) Extend(id string, hours int) (*State, error) {
 	m.set(&cp)
 	m.emitLog(id, fmt.Sprintf("··· TTL extended by %dh — new expiry %s", hours, exp.Format(time.RFC3339)))
 	return &cp, nil
+}
+
+// SetVerdict records the operator's judgement of a restore test — the human
+// half of the drill evidence. Allowed on any lab that reached ready (before
+// or after teardown); a later verdict overwrites an earlier one, and the
+// verdict becomes the namespace's latest drill audit entry.
+func (m *Manager) SetVerdict(id, status, note, actor string) (*State, error) {
+	if status != "passed" && status != "failed" {
+		return nil, fmt.Errorf("verdict must be %q or %q", "passed", "failed")
+	}
+	m.mu.Lock()
+	st, ok := m.jobs[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("lab %s not found", id)
+	}
+	if st.ReadyAt == nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("lab %s never reached ready; there is nothing to pass or fail", id)
+	}
+	now := time.Now().UTC()
+	st.Verdict = status
+	st.VerdictNote = note
+	st.VerdictBy = actor
+	st.VerdictAt = &now
+	cp := *st
+	m.mu.Unlock()
+	m.set(&cp)
+	m.emitLog(id, fmt.Sprintf("··· operator verdict: %s (%s)%s", status, actor, noteSuffix(note)))
+	if m.Audit != nil {
+		detail := fmt.Sprintf("operator verdict: tier=%s", cp.Tier)
+		if cp.AppName != "" {
+			detail += " app=" + cp.AppName
+		}
+		if note != "" {
+			detail += " — " + note
+		}
+		_, _ = m.Audit.Insert(context.Background(), audit.Entry{
+			Kind:      "drill",
+			Actor:     actor,
+			Namespace: cp.SourceNamespace,
+			Status:    status,
+			Detail:    detail,
+			RestoreID: cp.LabID,
+		})
+	}
+	return &cp, nil
+}
+
+func noteSuffix(note string) string {
+	if note == "" {
+		return ""
+	}
+	return ": " + note
 }
 
 // Start validates a lab request, claims the single-lab slot, and provisions

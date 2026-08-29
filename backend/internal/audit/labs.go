@@ -159,9 +159,10 @@ WHERE a.kind = 'drill' AND a.namespace IS NOT NULL
 		return nil, err
 	}
 
+	// 'success' = the lab reached ready; 'passed' = the operator's verdict.
 	srows, err := s.db.QueryContext(ctx, `
 SELECT namespace, MAX(at) FROM audit
-WHERE kind = 'drill' AND status = 'success' AND namespace IS NOT NULL
+WHERE kind = 'drill' AND status IN ('success', 'passed') AND namespace IS NOT NULL
 GROUP BY namespace`)
 	if err != nil {
 		return nil, err

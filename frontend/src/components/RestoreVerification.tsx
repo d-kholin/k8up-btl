@@ -38,7 +38,11 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
       if (!d) return { namespace: ns, state: 'never' as const }
       return {
         namespace: ns,
-        state: d.lastStatus === 'success' ? ('verified' as const) : ('failed' as const),
+        // 'success' = lab reached ready; 'passed' = operator verdict.
+        state:
+          d.lastStatus === 'success' || d.lastStatus === 'passed'
+            ? ('verified' as const)
+            : ('failed' as const),
         lastAt: d.lastAt,
         lastSuccessAt: d.lastSuccessAt,
       }

@@ -149,6 +149,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/lab/{id}/logs", s.handleLabLogs)
 	mux.HandleFunc("POST /api/v1/lab/{id}/teardown", s.handleLabTeardown)
 	mux.HandleFunc("POST /api/v1/lab/{id}/extend", s.handleLabExtend)
+	mux.HandleFunc("POST /api/v1/lab/{id}/verdict", s.handleLabVerdict)
 	mux.HandleFunc("GET /api/v1/events", s.handleSSE)
 
 	// No CORS middleware on purpose: the SPA is served same-origin by this

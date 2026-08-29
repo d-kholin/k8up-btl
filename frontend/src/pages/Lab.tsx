@@ -20,10 +20,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 const MAX_LINES = 1500
 
 function stepBadge(step: string) {
-  if (step === 'ready') return <Badge variant="success">ready</Badge>
+  if (step === 'ready') return <Badge variant="success">ready to test</Badge>
   if (step === 'deleted') return <Badge variant="secondary">torn down</Badge>
   if (step === 'failed') return <Badge variant="danger">failed</Badge>
   return <Badge variant="warning">{step.replaceAll('_', ' ')}</Badge>
+}
+
+function verdictBadge(lab: LabState) {
+  if (!lab.verdict) return null
+  return (
+    <Badge variant={lab.verdict === 'passed' ? 'success' : 'danger'}>test {lab.verdict}</Badge>
+  )
 }
 
 export default function Lab() {
@@ -236,24 +243,50 @@ export default function Lab() {
               </div>
             )}
             {current.step === 'ready' && (
-              <p className="text-xs text-muted-foreground">
-                {current.tier === 'data' ? (
-                  <>
-                    Browse the restored files via service{' '}
-                    <span className="font-mono">{current.labNamespace}/lab-inspect:8080</span> — route it through the
-                    tunnel or{' '}
-                    <span className="font-mono">
-                      kubectl -n {current.labNamespace} port-forward svc/lab-inspect 8080
-                    </span>
-                  </>
+              <div className="space-y-1 rounded-md border bg-muted/30 p-3">
+                <div className="text-sm font-medium">Connect</div>
+                {current.services?.length ? (
+                  <div className="space-y-1">
+                    {current.services.map((s) =>
+                      (s.ports?.length ? s.ports : [80]).map((p) => (
+                        <div key={`${s.name}:${p}`} className="flex flex-wrap items-baseline gap-x-3 text-xs">
+                          <span className="font-mono">
+                            {s.name}.{current.labNamespace}.svc.cluster.local:{p}
+                          </span>
+                          <span className="font-mono text-muted-foreground">
+                            kubectl -n {current.labNamespace} port-forward svc/{s.name} {p}
+                          </span>
+                        </div>
+                      )),
+                    )}
+                    <p className="pt-1 text-xs text-muted-foreground">
+                      Point the tunnel (Pangolin resource) at the service target, or use the port-forward.
+                    </p>
+                  </div>
                 ) : (
-                  <>
-                    The app is running in <span className="font-mono">{current.labNamespace}</span> with its production
-                    service names — reach it via its <span className="font-mono">*-lab</span> hostname (if registered)
-                    or port-forward its Service.
-                  </>
+                  <p className="text-xs text-muted-foreground">
+                    No Services found in <span className="font-mono">{current.labNamespace}</span> — check the lab log.
+                  </p>
                 )}
-              </p>
+              </div>
+            )}
+            {current.verdict ? (
+              <div className="flex flex-wrap items-baseline gap-2 text-sm">
+                {verdictBadge(current)}
+                <span className="text-xs text-muted-foreground">
+                  by {current.verdictBy} {current.verdictAt ? `· ${formatWhen(current.verdictAt)}` : ''}
+                </span>
+                {current.verdictNote && <span className="text-xs">{current.verdictNote}</span>}
+              </div>
+            ) : (
+              current.readyAt &&
+              current.step !== 'deleted' && (
+                <VerdictForm
+                  lab={current}
+                  onDone={load}
+                  onError={setError}
+                />
+              )
             )}
           </CardContent>
         </Card>
@@ -343,7 +376,7 @@ export default function Lab() {
                       {formatWhen(d.lastAt)}
                     </TableCell>
                     <TableCell>
-                      {d.lastStatus === 'success' ? (
+                      {d.lastStatus === 'success' || d.lastStatus === 'passed' ? (
                         <Badge variant="success">verified</Badge>
                       ) : (
                         <Badge variant="danger">{d.lastStatus}</Badge>
@@ -372,6 +405,7 @@ export default function Lab() {
                 <TableHead>Source</TableHead>
                 <TableHead>Tier</TableHead>
                 <TableHead>Step</TableHead>
+                <TableHead>Result</TableHead>
                 <TableHead className="hidden sm:table-cell">Started</TableHead>
                 <TableHead className="hidden md:table-cell">Torn down by</TableHead>
               </TableRow>
@@ -386,6 +420,7 @@ export default function Lab() {
                   <TableCell className="font-mono text-xs">{l.sourceNamespace}</TableCell>
                   <TableCell className="text-xs">{l.tier}</TableCell>
                   <TableCell>{stepBadge(l.step)}</TableCell>
+                  <TableCell title={l.verdictNote}>{verdictBadge(l) || <span className="text-xs text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
                     {formatWhen(l.startedAt)}
                   </TableCell>
@@ -396,7 +431,7 @@ export default function Lab() {
               ))}
               {(overview?.labs || []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
+                  <TableCell colSpan={6} className="text-muted-foreground">
                     No lab runs yet.
                   </TableCell>
                 </TableRow>
@@ -417,6 +452,56 @@ export default function Lab() {
         }}
         onError={setError}
       />
+    </div>
+  )
+}
+
+/** Operator judgement on a ready lab: pass/fail + note — recorded as the
+ * namespace's latest drill evidence. */
+function VerdictForm({
+  lab,
+  onDone,
+  onError,
+}: {
+  lab: LabState
+  onDone: () => void
+  onError: (msg: string) => void
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = (status: 'passed' | 'failed') => {
+    setBusy(true)
+    api
+      .labVerdict(lab.labId, status, note.trim())
+      .then(() => onDone())
+      .catch((e: Error) => onError(e.message))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="text-sm font-medium">Record test result</div>
+      <input
+        type="text"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Note (what was checked, what you found)…"
+        maxLength={2000}
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      <div className="flex gap-2">
+        <Button size="sm" disabled={busy} onClick={() => submit('passed')}>
+          Mark passed
+        </Button>
+        <Button size="sm" variant="destructive" disabled={busy} onClick={() => submit('failed')}>
+          Mark failed
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Becomes the latest drill evidence for {lab.sourceNamespace} — shown on the dashboard's restore
+        verification panel.
+      </p>
     </div>
   )
 }

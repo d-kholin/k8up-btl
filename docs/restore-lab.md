@@ -48,10 +48,13 @@ entry — the dashboard shows *last verified restore per app*.
      cannot touch anything else,
    - **no automated sync** — synced once at creation, never self-healed,
    - the Argo resources finalizer, so deleting the Application cascades.
-4. Once the clone reports Synced + Healthy (recorded as the RTO-actual
-   timestamp), the SQL dump — if any — is piped `restic dump | <restore
-   command>` into the lab database pod, exactly like a production SQL recovery
-   but without quiesce or safety backup (it's a lab).
+4. Once the clone's one-shot sync succeeds and it reports Healthy (recorded
+   as the RTO-actual timestamp), the SQL dump — if any — is piped
+   `restic dump | <restore command>` into the lab database pod, exactly like
+   a production SQL recovery but without quiesce or safety backup (it's a
+   lab). The clone typically shows *OutOfSync* forever — the pre-created
+   PVCs diff against their git manifests and nothing self-heals by design —
+   which is expected and ignored.
 5. The lab stays up for its TTL (default 24 h, extendable from the UI), then is
    torn down automatically: clone Application deleted (cascade), every PVC in
    the lab namespace deleted, and — because the storage class retains volumes —
@@ -128,9 +131,20 @@ Backend configuration:
 - The lab pays the full restic restore cost — there is no mount-from-backup
   shortcut. That is also the point: the copy is the thing being tested.
 
+## Testing and evidence
+
+A ready lab shows its **Connect** endpoints (every Service in the lab
+namespace, as `<name>.<lab-ns>.svc.cluster.local:<port>` plus the equivalent
+port-forward) — point a tunnel resource at one or port-forward it. The
+operator then records a **verdict** (passed/failed + note) on the Lab page;
+the verdict becomes the namespace's latest `drill` audit entry and drives the
+dashboard's restore-verification panel. Automatic evidence ("lab reached
+ready") counts as verified too, but an operator "failed" verdict overrides it.
+
 ## Verification tiers (roadmap)
 
-v1 verification is "Argo reports the clone Healthy" (heartbeat) plus the
-operator's own eyes. The design leaves room for: scheduled drills (cron over
+v1 verification is "the clone's sync succeeded and Argo reports it Healthy"
+(heartbeat), a restic fatal-error guard against 0-byte restores, plus the
+operator's judgement. The design leaves room for: scheduled drills (cron over
 the same lab flow), sentinel checksums (restic `diff`/`stats` against the
 restored volume), and app-level probes. See `docs/IDEAS.md`.

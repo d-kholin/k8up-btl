@@ -425,6 +425,32 @@ func (c *Clients) DeleteInspectWorkload(ctx context.Context, labNS string) error
         return nil
 }
 
+// LabService is a connectable endpoint inside the lab namespace, surfaced so
+// the operator knows what to point the tunnel (or a port-forward) at.
+type LabService struct {
+        Name  string  `json:"name"`
+        Ports []int32 `json:"ports"`
+}
+
+// ListLabServices lists the Services currently in the lab namespace — the
+// clone's own Services plus the data-tier inspection service.
+func (c *Clients) ListLabServices(ctx context.Context, labNS string) ([]LabService, error) {
+        list, err := c.Typed.CoreV1().Services(labNS).List(ctx, metav1.ListOptions{})
+        if err != nil {
+                return nil, err
+        }
+        out := make([]LabService, 0, len(list.Items))
+        for i := range list.Items {
+                s := &list.Items[i]
+                svc := LabService{Name: s.Name}
+                for _, p := range s.Spec.Ports {
+                        svc.Ports = append(svc.Ports, p.Port)
+                }
+                out = append(out, svc)
+        }
+        return out, nil
+}
+
 // NamespaceExists verifies the lab namespace is deployed before a run starts.
 func (c *Clients) NamespaceExists(ctx context.Context, name string) (bool, error) {
         _, err := c.Typed.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})

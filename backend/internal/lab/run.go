@@ -188,6 +188,19 @@ func (m *Manager) run(st *State) {
 		}
 	}
 
+	// Surface the connectable endpoints (clone Services / inspection pod) so
+	// the operator knows what to point the tunnel or a port-forward at.
+	if svcs, err := m.Clients.ListLabServices(ctx, st.LabNamespace); err == nil {
+		st.Services = svcs
+		for _, s := range svcs {
+			for _, p := range s.Ports {
+				m.emitLog(st.LabID, fmt.Sprintf("··· connect: %s.%s.svc.cluster.local:%d  (or: kubectl -n %s port-forward svc/%s %d)", s.Name, st.LabNamespace, p, st.LabNamespace, s.Name, p))
+			}
+		}
+	} else {
+		m.emitLog(st.LabID, fmt.Sprintf("··· could not list lab services: %v", err))
+	}
+
 	st.Step = StepReady
 	now := time.Now().UTC()
 	st.ReadyAt = &now
@@ -198,29 +211,38 @@ func (m *Manager) run(st *State) {
 	m.recordDrill(st, "success", "")
 }
 
-// waitAppHealthy polls the clone Application until Synced + Healthy, failing
-// fast on sync error phases and Argo error conditions.
+// waitAppHealthy polls the clone Application until its one-shot sync has
+// succeeded AND health is Healthy, failing fast on sync error phases and
+// Argo error conditions. Deliberately NOT gated on sync.status == "Synced":
+// the clone never converges to Synced (the pre-created PVCs diff against
+// their git manifests, and nothing self-heals by design) — a lab is ready
+// when the sync operation succeeded and the app reports Healthy.
 func (m *Manager) waitAppHealthy(ctx context.Context, st *State) error {
 	lastHealth := ""
+	lastSync := ""
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("timed out waiting for Synced+Healthy (last: sync=%s health=%s): %w", st.Health, lastHealth, err)
+			return fmt.Errorf("timed out waiting for the clone to become Healthy (last: sync=%s health=%s): %w", lastSync, lastHealth, err)
 		}
 		status, err := m.Clients.GetApplicationStatus(ctx, m.ArgoNamespace, st.CloneAppName)
 		if err != nil {
 			return err
 		}
-		if status.Health != lastHealth {
+		if status.Health != lastHealth || status.Sync != lastSync {
 			lastHealth = status.Health
+			lastSync = status.Sync
 			st.Health = status.Health
 			m.set(st)
-			m.emitLog(st.LabID, fmt.Sprintf("clone status: sync=%s health=%s", status.Sync, status.Health))
+			m.emitLog(st.LabID, fmt.Sprintf("clone status: sync=%s health=%s phase=%s", status.Sync, status.Health, status.Phase))
 		}
 		switch status.Phase {
 		case "Failed", "Error":
 			return fmt.Errorf("sync %s: %s", strings.ToLower(status.Phase), status.Message)
 		}
-		if status.Sync == "Synced" && status.Health == "Healthy" {
+		if status.Health == "Healthy" && (status.Phase == "Succeeded" || status.Sync == "Synced") {
+			if status.Sync != "Synced" {
+				m.emitLog(st.LabID, "··· clone shows OutOfSync — expected for a lab (pre-created PVCs diff against git; no self-heal) and safe to ignore")
+			}
 			return nil
 		}
 		t := time.NewTimer(5 * time.Second)

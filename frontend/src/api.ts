@@ -127,6 +127,11 @@ export type LabState = {
   tornDownBy?: string
   restorePoint?: string
   cancelRequested?: boolean
+  services?: Array<{ name: string; ports?: number[] }>
+  verdict?: 'passed' | 'failed'
+  verdictNote?: string
+  verdictBy?: string
+  verdictAt?: string
 }
 
 export type LabOverview = {
@@ -456,6 +461,11 @@ export const api = {
       body: JSON.stringify({ hours }),
     }),
   labLogs: (id: string) => req<{ labId: string; lines: string[] }>(`/api/v1/lab/${id}/logs`),
+  labVerdict: (id: string, status: 'passed' | 'failed', note: string) =>
+    req<LabState>(`/api/v1/lab/${id}/verdict`, {
+      method: 'POST',
+      body: JSON.stringify({ status, note }),
+    }),
   labVerified: () => req<DrillStatus[]>('/api/v1/lab/verified'),
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>
     req<K8sObject>('/api/v1/backups', { method: 'POST', body: JSON.stringify({ namespace, spec }) }),
