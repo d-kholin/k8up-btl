@@ -63,6 +63,15 @@ type Config struct {
         SQLRestoreRequireAnnotation bool
         // SafetyBackupTimeout bounds the pre-recovery safety backup wait.
         SafetyBackupTimeout time.Duration
+
+        // Restore Lab (docs/restore-lab.md). Empty namespace disables the
+        // feature; deploy/k8s/restore-lab must be applied for the
+        // namespace/RBAC to exist.
+        RestoreLabNamespace  string
+        RestoreLabTTL        time.Duration
+        RestoreLabAppProject string
+        // RestoreLabInspectImage serves the data-tier read-only file browser.
+        RestoreLabInspectImage string
 }
 
 // SQLRestoreOverrides maps engine → configured restore command (empty entries
@@ -117,6 +126,11 @@ func Load() Config {
                 SQLRestoreCmdMySQL:          os.Getenv("SQL_RESTORE_CMD_MYSQL"),
                 SQLRestoreRequireAnnotation: boolEnv("SQL_RESTORE_REQUIRE_ANNOTATION", false),
                 SafetyBackupTimeout:         durationEnv("SAFETY_BACKUP_TIMEOUT", 30*time.Minute),
+
+                RestoreLabNamespace:    os.Getenv("RESTORE_LAB_NAMESPACE"),
+                RestoreLabTTL:          durationEnv("RESTORE_LAB_TTL", 24*time.Hour),
+                RestoreLabAppProject:   getenv("RESTORE_LAB_APPPROJECT", "restore-lab"),
+                RestoreLabInspectImage: getenv("RESTORE_LAB_INSPECT_IMAGE", "docker.io/filebrowser/filebrowser:v2"),
         }
         if cfg.ResticCacheDir == "" {
                 cfg.ResticCacheDir = filepath.Join(filepath.Dir(cfg.AuditDBPath), "restic-cache")

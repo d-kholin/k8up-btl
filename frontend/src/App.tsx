@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   DatabaseBackup,
+  FlaskConical,
   HardDrive,
   History,
   Layers3,
@@ -22,6 +23,7 @@ import Snapshots from './pages/Snapshots'
 import Workloads from './pages/Workloads'
 import WorkloadDetail from './pages/WorkloadDetail'
 import Restores from './pages/Restores'
+import Lab from './pages/Lab'
 import Audit from './pages/Audit'
 import Browser from './pages/Browser'
 import SnapshotDiffPage from './pages/SnapshotDiff'
@@ -34,6 +36,7 @@ const nav = [
   { to: '/snapshots', label: 'Snapshots', icon: HardDrive },
   { to: '/workloads', label: 'Workloads', icon: DatabaseBackup },
   { to: '/restores', label: 'Restores', icon: History },
+  { to: '/lab', label: 'Restore Lab', icon: FlaskConical },
   { to: '/audit', label: 'Audit', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ]
@@ -286,6 +289,14 @@ export default function App() {
               element={
                 <PageShell mode="fill">
                   <Restores />
+                </PageShell>
+              }
+            />
+            <Route
+              path="/lab"
+              element={
+                <PageShell>
+                  <Lab />
                 </PageShell>
               }
             />

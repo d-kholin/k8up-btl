@@ -3,8 +3,10 @@ package notify
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/d-kholin/k8up-gui/internal/audit"
+	"github.com/d-kholin/k8up-gui/internal/lab"
 	"github.com/d-kholin/k8up-gui/internal/restore"
 )
 
@@ -118,6 +120,57 @@ func InterruptedRestoresEvent(states []restore.State) (Event, bool) {
 		Severity: SeverityFailure,
 		Tags:     []string{"restore", "interrupted"},
 	}, true
+}
+
+// LabOutcomeEvent formats a Restore Lab run reaching a state worth alerting
+// on: ready (the drill's success evidence), failed provisioning, or a
+// teardown that left resources behind. Returns ok=false otherwise.
+func LabOutcomeEvent(st lab.State) (Event, bool) {
+	target := st.SourceNamespace
+	if st.AppName != "" {
+		target = st.AppName
+	}
+	switch st.Step {
+	case lab.StepReady:
+		var b strings.Builder
+		fmt.Fprintf(&b, "Restore lab for %s is ready (%s tier).\n", target, st.Tier)
+		if st.HealthyAt != nil {
+			fmt.Fprintf(&b, "Git deploy reached Healthy in %s.\n", st.HealthyAt.Sub(st.StartedAt).Round(time.Second))
+		}
+		if len(st.PVCs) > 0 {
+			names := make([]string, 0, len(st.PVCs))
+			for _, p := range st.PVCs {
+				names = append(names, p.PVCName)
+			}
+			fmt.Fprintf(&b, "Restored PVCs: %s\n", strings.Join(names, ", "))
+		}
+		if st.DumpSnapshot != "" {
+			b.WriteString("SQL dump replayed into the lab database.\n")
+		}
+		if st.ExpiresAt != nil {
+			fmt.Fprintf(&b, "Auto-teardown at %s.\n", st.ExpiresAt.Format("2006-01-02 15:04 MST"))
+		}
+		return Event{
+			Title:    "Restore lab ready: " + target,
+			Body:     b.String(),
+			Severity: SeveritySuccess,
+			Tags:     []string{"lab", st.SourceNamespace},
+		}, true
+	case lab.StepFailed:
+		title := "Restore lab FAILED: " + target
+		if strings.Contains(st.LastError, "teardown") {
+			title = "Restore lab teardown incomplete: " + target
+		}
+		body := fmt.Sprintf("Lab %s (%s tier) for %s failed.\nError: %s\n", st.LabID, st.Tier, st.SourceNamespace, st.LastError)
+		return Event{
+			Title:    title,
+			Body:     body,
+			Severity: SeverityFailure,
+			Tags:     []string{"lab", st.SourceNamespace},
+		}, true
+	default:
+		return Event{}, false
+	}
 }
 
 func shortID(id string) string {

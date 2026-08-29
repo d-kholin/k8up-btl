@@ -92,12 +92,84 @@ export type ClusterStatus = {
   checkedAt?: string
 }
 
+// Restore Lab (docs/restore-lab.md)
+export type LabPVCPart = {
+  pvcName: string
+  snapshotName: string
+  snapshotId: string
+  restoreCRName?: string
+  status?: 'pending' | 'running' | 'done' | 'failed'
+}
+
+export type LabState = {
+  labId: string
+  tier: 'data' | 'app'
+  sourceNamespace: string
+  labNamespace: string
+  appName?: string
+  cloneAppName?: string
+  step: string
+  pvcs?: LabPVCPart[]
+  dumpSnapshot?: string
+  dumpSnapshotId?: string
+  dumpPath?: string
+  dbPod?: string
+  restoreCommand?: string
+  inspectService?: string
+  health?: string
+  startedAt: string
+  readyAt?: string
+  healthyAt?: string
+  expiresAt?: string
+  finishedAt?: string
+  lastError?: string
+  actor?: string
+  tornDownBy?: string
+}
+
+export type LabOverview = {
+  enabled: boolean
+  namespace: string
+  current?: LabState
+  labs: LabState[]
+}
+
+export type LabPlan = {
+  sourceNamespace: string
+  app?: {
+    name: string
+    path: string
+    labPath?: string
+    targetRevision?: string
+    repoURL?: string
+  }
+  appError?: string
+  pvcs: Array<{
+    pvcName: string
+    snapshotName: string
+    snapshotId: string
+    date: string
+    sourceExists: boolean
+  }>
+  dump?: { snapshotName: string; snapshotId: string; path: string; date: string }
+  warnings?: string[]
+}
+
+export type DrillStatus = {
+  namespace: string
+  lastAt: string
+  lastStatus: string
+  lastLabId?: string
+  lastSuccessAt?: string
+}
+
 export type Meta = {
   grafanaDashboardUrl?: string
   prometheusConfigured: boolean
   argocdNamespace: string
   notifyChannels?: string[]
   cluster?: ClusterStatus
+  restoreLab?: { enabled: boolean; namespace: string }
 }
 
 export type AuditPage = {
@@ -359,6 +431,25 @@ export const api = {
   /** SSE endpoint streaming a K8up job's live console (use with EventSource). */
   jobConsoleUrl: (kind: string, namespace: string, name: string) =>
     `/api/v1/jobs/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`,
+  lab: () => req<LabOverview>('/api/v1/lab'),
+  labPlan: (namespace: string) =>
+    req<LabPlan>(`/api/v1/lab/plan?namespace=${encodeURIComponent(namespace)}`),
+  labStart: (body: {
+    sourceNamespace: string
+    tier: 'data' | 'app'
+    snapshotName?: string
+    pvcName?: string
+    ttlHours?: number
+  }) => req<LabState>('/api/v1/lab', { method: 'POST', body: JSON.stringify(body) }),
+  labTeardown: (id: string) =>
+    req<{ status: string }>(`/api/v1/lab/${id}/teardown`, { method: 'POST' }),
+  labExtend: (id: string, hours: number) =>
+    req<LabState>(`/api/v1/lab/${id}/extend`, {
+      method: 'POST',
+      body: JSON.stringify({ hours }),
+    }),
+  labLogs: (id: string) => req<{ labId: string; lines: string[] }>(`/api/v1/lab/${id}/logs`),
+  labVerified: () => req<DrillStatus[]>('/api/v1/lab/verified'),
   createBackup: (namespace: string, spec: Record<string, unknown> = {}) =>
     req<K8sObject>('/api/v1/backups', { method: 'POST', body: JSON.stringify({ namespace, spec }) }),
   createCheck: (namespace: string, spec: Record<string, unknown> = {}) =>

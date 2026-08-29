@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS backup_events (
 CREATE INDEX IF NOT EXISTS idx_backup_events_started ON backup_events(started_at);
 CREATE INDEX IF NOT EXISTS idx_backup_events_kind ON backup_events(kind);
 
+-- Durable Restore Lab runs (state + log buffer), same shape as restore_jobs.
+CREATE TABLE IF NOT EXISTS labs (
+  lab_id TEXT PRIMARY KEY,
+  state_json TEXT NOT NULL,
+  logs_json TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_labs_updated ON labs(updated_at);
+
 -- Small key/value store for runtime settings (e.g. notification overrides).
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,

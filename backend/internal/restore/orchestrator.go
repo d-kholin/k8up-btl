@@ -608,98 +608,10 @@ func (o *Orchestrator) waitRestoreComplete(ctx context.Context, ns, name string)
 }
 
 // waitJobComplete polls any K8up job CR (Restore, Backup, …) until it reports
-// a terminal state — they share the status.finished + Completed/Failed
-// condition schema.
+// a terminal state (shared status schema); the generic wait lives in the k8s
+// package so the Restore Lab manager can reuse it.
 func (o *Orchestrator) waitJobComplete(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		obj, err := o.Clients.GetResource(ctx, gvr, ns, name)
-		if err != nil {
-			return err
-		}
-
-		// Prefer status.finished — K8up sets this when the job ends (success or fail).
-		finished, finFound, _ := nestedBool(obj.Object, "status", "finished")
-		if finFound && finished {
-			// Completed condition: reason Failed vs Succeeded
-			if conds, found, _ := nestedSlice(obj.Object, "status", "conditions"); found {
-				for _, c := range conds {
-					m, ok := c.(map[string]any)
-					if !ok {
-						continue
-					}
-					t, _ := m["type"].(string)
-					st, _ := m["status"].(string)
-					reason, _ := m["reason"].(string)
-					msg, _ := m["message"].(string)
-					if t == "Completed" && st == "True" {
-						if reason == "Failed" || reason == "Error" {
-							return fmt.Errorf("restore failed: %s", msg)
-						}
-						// Succeeded or Finished without failure
-						return nil
-					}
-					if t == "Failed" && st == "True" {
-						return fmt.Errorf("restore failed: %s", msg)
-					}
-				}
-			}
-			// finished but no clear condition — treat as success only if no Failed job message
-			return nil
-		}
-
-		// In-progress signals: Ready=True / Progressing=True are NOT success.
-		if conds, found, _ := nestedSlice(obj.Object, "status", "conditions"); found {
-			for _, c := range conds {
-				m, ok := c.(map[string]any)
-				if !ok {
-					continue
-				}
-				t, _ := m["type"].(string)
-				st, _ := m["status"].(string)
-				reason, _ := m["reason"].(string)
-				msg, _ := m["message"].(string)
-				if t == "Completed" && st == "True" && (reason == "Failed" || reason == "Error") {
-					return fmt.Errorf("restore failed: %s", msg)
-				}
-				if t == "Failed" && st == "True" {
-					return fmt.Errorf("restore failed: %s", msg)
-				}
-				// Progressing False + Finished without finished flag yet
-				if t == "Progressing" && st == "False" && reason == "Finished" {
-					if strings.Contains(strings.ToLower(msg), "failed") {
-						return fmt.Errorf("restore failed: %s", msg)
-					}
-				}
-			}
-		}
-
-		t := time.NewTimer(3 * time.Second)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return ctx.Err()
-		case <-t.C:
-		}
-	}
-}
-
-func nestedBool(obj map[string]any, fields ...string) (bool, bool, error) {
-	var cur any = obj
-	for _, f := range fields {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return false, false, nil
-		}
-		cur, ok = m[f]
-		if !ok {
-			return false, false, nil
-		}
-	}
-	b, ok := cur.(bool)
-	return b, ok, nil
+	return o.Clients.WaitJobDone(ctx, gvr, ns, name)
 }
 
 // ManualResumeArgo scales the application-controller back up (global unstick).

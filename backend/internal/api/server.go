@@ -22,6 +22,7 @@ import (
 	"github.com/d-kholin/k8up-gui/internal/auth"
 	"github.com/d-kholin/k8up-gui/internal/config"
 	"github.com/d-kholin/k8up-gui/internal/k8s"
+	"github.com/d-kholin/k8up-gui/internal/lab"
 	"github.com/d-kholin/k8up-gui/internal/notify"
 	"github.com/d-kholin/k8up-gui/internal/resticcmd"
 	"github.com/d-kholin/k8up-gui/internal/restore"
@@ -36,6 +37,8 @@ type Server struct {
 	Log    *slog.Logger
 	// Notify is optional; set by main when any channel is configured.
 	Notify *notify.Manager
+	// Lab is optional (Restore Lab feature); set by main via WireLab.
+	Lab *lab.Manager
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
@@ -137,6 +140,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/pvcs", s.handleListPVCs)
 	mux.HandleFunc("GET /api/v1/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/v1/stats/storage", s.handleStorageStats)
+	mux.HandleFunc("GET /api/v1/lab", s.handleLab)
+	mux.HandleFunc("POST /api/v1/lab", s.handleLabStart)
+	// Query param, not a path segment: /lab/plan/{ns} would ambiguously
+	// overlap /lab/{id}/logs and panic ServeMux registration.
+	mux.HandleFunc("GET /api/v1/lab/plan", s.handleLabPlan)
+	mux.HandleFunc("GET /api/v1/lab/verified", s.handleLabVerified)
+	mux.HandleFunc("GET /api/v1/lab/{id}/logs", s.handleLabLogs)
+	mux.HandleFunc("POST /api/v1/lab/{id}/teardown", s.handleLabTeardown)
+	mux.HandleFunc("POST /api/v1/lab/{id}/extend", s.handleLabExtend)
 	mux.HandleFunc("GET /api/v1/events", s.handleSSE)
 
 	// No CORS middleware on purpose: the SPA is served same-origin by this
@@ -260,6 +272,10 @@ func (s *Server) handleMeta(w http.ResponseWriter, _ *http.Request) {
 		"argocdNamespace":      s.Cfg.ArgoCDNamespace,
 		"notifyChannels":       channels,
 		"cluster":              s.clusterStatus(),
+		"restoreLab": map[string]any{
+			"enabled":   s.labEnabled(),
+			"namespace": s.Cfg.RestoreLabNamespace,
+		},
 	})
 }
 

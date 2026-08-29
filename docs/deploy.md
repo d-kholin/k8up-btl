@@ -98,6 +98,25 @@ in-cluster NetworkPolicy (ingress only from `newt`).
 The API never returns 401 for missing identity. Audit rows use
 `AUTH_DEFAULT_USER` (default `operator`), or a proxy header if present.
 
+## Restore Lab (optional)
+
+Restore testing in an isolated namespace — see `docs/restore-lab.md` for the
+full design and per-app promotion checklist. To enable:
+
+```bash
+# 1. Scaffolding (namespace, AppProject, NetworkPolicies, extra RBAC) —
+#    consume as a second remote base next to deploy/k8s, or apply directly:
+kubectl apply -k deploy/k8s/restore-lab
+
+# 2. Point the backend at it (overlay patch on the Deployment):
+#    env: RESTORE_LAB_NAMESPACE=restore-lab
+#    optional: RESTORE_LAB_TTL=24h, RESTORE_LAB_APPPROJECT=restore-lab,
+#              RESTORE_LAB_INSPECT_IMAGE=docker.io/filebrowser/filebrowser:v2
+```
+
+The lab namespace ships with default-deny egress; add explicit rules (e.g.
+your OIDC IdP) by patching `allow-extra-egress` in an overlay.
+
 ## SQL dump recovery (per-app setup)
 
 K8up takes application-level dumps via the `k8up.io/backupcommand` pod

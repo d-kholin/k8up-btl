@@ -1,0 +1,12 @@
+# The Restore Lab namespace. PSA "baseline", not "restricted", on purpose:
+# lab Restore CRs run K8up's default (root) restic pod so restored files keep
+# their original ownership, and baseline-level apps can be cloned here.
+# Isolation comes from the NetworkPolicies, not from PSA.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: restore-lab
+  labels:
+    kubernetes.io/metadata.name: restore-lab
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: baseline

@@ -5,25 +5,20 @@ into the PRD when it's picked up.
 
 ## Restore to an alternate PVC (safe restores / restore drills)
 
-_Logged 2026-08-17. Status: liked, deferred._
+_Logged 2026-08-17. Status: **picked up 2026-08-29** as the Restore Lab — see
+`docs/restore-lab.md`. What shipped: lab-namespace restores (data tier + full
+app-lab clones), TTL teardown, `drill` audit kind, dashboard verification
+panel. Still open from the original sketch and the design interview:_
 
-Today restores target the original PVC, which means downtime (Argo pause +
-scale-down) and overwriting live data. K8up's `Restore` CR supports restoring
-into a different claim, which unlocks:
-
-- **Safe recovery**: restore a snapshot into a new/scratch PVC without touching
-  the running workload — inspect or copy out what you need (e.g. one database
-  table) and delete it.
-- **No orchestration needed**: nothing mounts the target PVC, so the whole
-  Argo-pause / scale-down / scale-up choreography is skipped.
-- **Restore drills**: periodically restore a recent snapshot to a scratch PVC,
-  verify contents (checksum/marker file), delete, and record the result in the
-  audit log — turning "we take backups" into "we've proven backups restore."
-
-Sketch: add a target-PVC choice to `RestoreSnapshotDialog` (original vs
-new/other claim); orchestrator gets a "detached" mode that creates the Restore
-CR with the alternate `claimName` and skips Argo/scale steps; drills would be a
-cron-style loop in the backend plus a freshness-style panel on the dashboard.
+- **Scheduled drills** — cron-style loop running the lab flow unattended
+  (Recorder-pattern ticker; the manual flow is the building block).
+- **Automated verification tiers** — sentinel checksums via restic
+  `diff`/`stats` against the restored volume; app-level probes beyond Argo
+  health.
+- **Restore-to-alternate-PVC in the source namespace** (the original "copy out
+  one table" use case) — the lab covers inspection, but an in-namespace scratch
+  restore is still occasionally handy.
+- **Pangolin API automation** for lab hostnames (v1 keeps registration manual).
 
 ## Coverage-gap detection (not yet picked up)
 

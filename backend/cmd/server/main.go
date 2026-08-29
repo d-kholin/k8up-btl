@@ -17,6 +17,7 @@ import (
 	"github.com/d-kholin/k8up-gui/internal/config"
 	"github.com/d-kholin/k8up-gui/internal/history"
 	"github.com/d-kholin/k8up-gui/internal/k8s"
+	"github.com/d-kholin/k8up-gui/internal/lab"
 	"github.com/d-kholin/k8up-gui/internal/notify"
 	"github.com/d-kholin/k8up-gui/internal/restore"
 )
@@ -115,6 +116,53 @@ func main() {
 	srv := api.NewServer(cfg, clients, orch, store, log)
 	srv.Notify = notifier
 	srv.StartClusterMonitor(context.Background())
+
+	// Restore Lab (docs/restore-lab.md) — enabled by RESTORE_LAB_NAMESPACE.
+	if cfg.RestoreLabNamespace != "" && clients != nil {
+		labMgr := lab.NewManager(clients, store, log)
+		labMgr.LabNamespace = cfg.RestoreLabNamespace
+		labMgr.ArgoNamespace = cfg.ArgoCDNamespace
+		labMgr.Project = cfg.RestoreLabAppProject
+		labMgr.InspectImage = cfg.RestoreLabInspectImage
+		labMgr.DefaultTTL = cfg.RestoreLabTTL
+		labMgr.RestoreTimeout = cfg.RestoreTimeout
+		srv.WireLab(labMgr)
+		{
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := labMgr.LoadPersisted(ctx); err != nil {
+				log.Warn("load persisted labs", "err", err)
+			}
+			cancel()
+		}
+		// Alert on labs reaching ready/failed, chained after the SSE publisher
+		// WireLab installed; dedupe per lab+step (set updates can re-emit).
+		{
+			notified := map[string]bool{}
+			var labNotifyMu sync.Mutex
+			prev := labMgr.OnUpdate
+			labMgr.OnUpdate = func(st lab.State) {
+				if prev != nil {
+					prev(st)
+				}
+				e, terminal := notify.LabOutcomeEvent(st)
+				if !terminal {
+					return
+				}
+				key := st.LabID + "|" + string(st.Step) + "|" + st.LastError
+				labNotifyMu.Lock()
+				seen := notified[key]
+				notified[key] = true
+				labNotifyMu.Unlock()
+				if !seen {
+					notifier.Go(e)
+				}
+			}
+		}
+		go labMgr.Run(context.Background())
+		log.Info("restore lab enabled", "namespace", cfg.RestoreLabNamespace, "project", cfg.RestoreLabAppProject, "ttl", cfg.RestoreLabTTL.String())
+	} else if cfg.RestoreLabNamespace != "" {
+		log.Warn("restore lab configured but kubernetes client unavailable; feature disabled")
+	}
 
 	// Alert on GUI-orchestrated restores reaching a terminal step. Chained onto
 	// the SSE publisher NewServer installed; dedupe because publish can re-emit

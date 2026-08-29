@@ -1,0 +1,121 @@
+# Lab isolation. SOPS secrets render into the lab through the normal
+# Argo/KSOPS path, so lab apps hold PRODUCTION credentials — default-deny
+# EGRESS is what makes that safe: same creds, no reachability.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: restore-lab
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# DNS for everything in the lab.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: restore-lab
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Lab pods may talk to each other (app → its own database, etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: restore-lab
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# K8up job pods (restic restore) must reach the S3 backend. K8up labels its
+# job pods with k8up.io/owned-by; scope the egress hole to those.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-k8up-jobs-egress
+  namespace: restore-lab
+spec:
+  podSelector:
+    matchExpressions:
+      - key: k8up.io/owned-by
+        operator: Exists
+  policyTypes:
+    - Egress
+  egress:
+    - {}
+---
+# Only the tunnel (newt) namespace may reach lab pods from outside — the same
+# front door production apps use, so cloned per-app policies keep working and
+# the lab inspection pod is reachable behind the proxy's auth.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-newt-ingress
+  namespace: restore-lab
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: newt
+---
+# Consumer extension point: add explicit egress rules for anything else the
+# lab must reach — e.g. the OIDC IdP for token exchange during app-lab login.
+# Example (patch or replace in your overlay):
+#
+#   apiVersion: networking.k8s.io/v1
+#   kind: NetworkPolicy
+#   metadata:
+#     name: allow-idp-egress
+#     namespace: restore-lab
+#   spec:
+#     podSelector: {}
+#     policyTypes: [Egress]
+#     egress:
+#       - to:
+#           - ipBlock:
+#               cidr: 172.20.0.7/32
+#         ports:
+#           - protocol: TCP
+#             port: 443
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-extra-egress
+  namespace: restore-lab
+spec:
+  # Placeholder selecting nothing; replace/patch in an overlay to open
+  # deliberate holes. Kept in git so the extension point is visible.
+  podSelector:
+    matchLabels:
+      k8up-btl.local/never-matches: "placeholder"
+  policyTypes:
+    - Egress
+  egress: []

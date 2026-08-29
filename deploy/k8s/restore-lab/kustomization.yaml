@@ -1,0 +1,18 @@
+# OPTIONAL Restore Lab scaffolding — consume this directory as a second remote
+# base next to deploy/k8s to enable restore testing (docs/restore-lab.md).
+# Deliberately NOT referenced by ../kustomization.yaml.
+#
+# No global `namespace:` here: resources span the lab namespace, the Argo CD
+# namespace (AppProject + Application RBAC) and cluster scope.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - appproject.yaml
+  - networkpolicy.yaml
+  - rbac.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/name: k8up-btl
+      app.kubernetes.io/part-of: k8up-btl
+    includeSelectors: false

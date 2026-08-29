@@ -26,8 +26,19 @@ K8up backup/restore GUI with Argo CD-aware restore orchestration. Spec: `docs/PR
    scope: annotation list → same Argo app (instance label / tracking-id) →
    whole namespace as last resort, always excluding the DB workload and always
    shown verbatim in the confirm dialog.
-8. Restore targets are locked to what the snapshot backed up (source PVC from
-   `spec.paths`); the server rejects any other target.
+8. **In-place** restore targets are locked to what the snapshot backed up
+   (source PVC from `spec.paths`); the server rejects any other target. The
+   only exception is the Restore Lab (`docs/restore-lab.md`), whose restores
+   land exclusively in the configured lab namespace (`RESTORE_LAB_NAMESPACE`),
+   never in a source namespace.
+9. Restore Lab rules: lab resources (PVCs, Restore CRs, inspection workloads)
+   are created ONLY in the lab namespace; clone Applications are created ONLY
+   with `project: restore-lab` (destination-locked AppProject), with NO
+   automated sync, and with kustomize delete-patches for the `Namespace`
+   resource and the K8up `Schedule` (a cloned Schedule would back lab data up
+   into the production repository). Teardown owns deleting every PVC in the
+   lab namespace and their retained PVs. No Argo pause is ever taken for a
+   lab run, and labs never quiesce or scale production workloads.
 
 ## Why global pause
 

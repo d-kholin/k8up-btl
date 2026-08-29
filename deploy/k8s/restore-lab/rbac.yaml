@@ -1,0 +1,88 @@
+# Extra RBAC for the Restore Lab, deliberately separate from the main
+# ClusterRole so the base install stays least-privilege when the lab is off.
+# Namespace-scoped wherever possible: lab resource creation is a Role in the
+# lab namespace, Application create/delete a Role in the Argo CD namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8up-btl-restore-lab
+  namespace: restore-lab
+rules:
+  # Lab PVCs are created before their Restore CRs and deleted at teardown.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "delete"]
+  # Data-tier inspection pod (file browser mounting the restored volume).
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8up-btl-restore-lab
+  namespace: restore-lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k8up-btl-restore-lab
+subjects:
+  - kind: ServiceAccount
+    name: k8up-btl
+    namespace: k8up-btl
+---
+# Clone Applications live in the Argo CD namespace (get/list/watch/patch are
+# already cluster-wide in the main ClusterRole).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8up-btl-restore-lab
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8up-btl-restore-lab
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k8up-btl-restore-lab
+subjects:
+  - kind: ServiceAccount
+    name: k8up-btl
+    namespace: k8up-btl
+---
+# Cluster scope: the default storage class retains PVs, so teardown deletes
+# the released PV after its lab PVC; namespace get verifies the lab exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8up-btl-restore-lab
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8up-btl-restore-lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8up-btl-restore-lab
+subjects:
+  - kind: ServiceAccount
+    name: k8up-btl
+    namespace: k8up-btl

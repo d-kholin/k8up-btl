@@ -1,0 +1,21 @@
+# Destination-locked AppProject for clone Applications. Defense in depth:
+# even a buggy clone cannot deploy outside the lab namespace, create cluster
+# resources (the empty clusterResourceWhitelist blocks the git-managed
+# Namespace should its delete-patch ever fail), or sync a K8up Schedule
+# (which would back lab data up into the production repository).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: restore-lab
+  namespace: argocd
+spec:
+  description: k8up-btl Restore Lab — clone apps restored for testing
+  sourceRepos:
+    - "*"
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: restore-lab
+  clusterResourceWhitelist: []
+  namespaceResourceBlacklist:
+    - group: k8up.io
+      kind: Schedule

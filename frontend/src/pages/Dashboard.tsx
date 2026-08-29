@@ -15,6 +15,7 @@ import { api, type AuditSummary, type BackupEvent, type K8sObject, type PVCRef, 
 import { formatBytes, formatWhen } from '../lib/utils'
 import BackupActivity from '../components/BackupActivity'
 import BackupFreshness from '../components/BackupFreshness'
+import RestoreVerification from '../components/RestoreVerification'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -310,6 +311,8 @@ export default function Dashboard() {
       <BackupActivity events={history} snapshots={snapshots} loading={loading} />
 
       <BackupFreshness schedules={schedules} snapshots={snapshots} pvcs={pvcs} loading={loading} />
+
+      <RestoreVerification schedules={schedules} />
 
       {(storage || storageLoading) && (
         <Card>

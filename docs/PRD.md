@@ -79,6 +79,13 @@ If the target workload has no Argo ownership markers, skip steps 2 and 6 entirel
     - Restore: restic has no built-in restore-size stats output; "bytes recovered" for a given restore should be computed as the restore-size of the snapshot that was restored (captured at restore time, from 5.2).
   - Dashboard should show: bytes backed up over time (per schedule and aggregate), cumulative dedup ratio/storage saved, bytes recovered per restore event (from the audit log in 5.7).
 
+### 5.9 Restore Lab (restore testing)
+- Restore snapshots into a dedicated, network-isolated lab namespace (default-deny ingress **and egress** — lab apps hold production SOPS-rendered credentials) without touching the source namespace: no Argo pause, no scale-down, no source-lock.
+- Two tiers: **data lab** (scratch PVC + read-only file-browser pod, zero per-app setup) and **app lab** (clone the app's Argo Application from git — kustomize-namespace-rewritten, Namespace + K8up Schedule stripped, destination-locked AppProject, no automated sync — against the restored PVCs, then replay the SQL dump via the 5.2-style exec pipe).
+- One lab at a time; TTL auto-teardown (default 24 h, extendable) deletes the clone Application, every PVC in the lab namespace, and their retained PVs.
+- Every run records a `drill` audit entry (outcome, snapshot ids, time-to-Healthy as the RTO actual); dashboard shows last verified restore per namespace.
+- Full design, isolation model and per-app promotion checklist: `docs/restore-lab.md`.
+
 - Backend must not expose any service account or Argo API token to the browser — all k8s/Argo API calls happen server-side.
 - Live status updates via k8s `watch` API preferred over polling, to keep the UI responsive during long-running restore jobs.
 - All destructive actions (restore, scale-down) require explicit confirmation in the UI.
