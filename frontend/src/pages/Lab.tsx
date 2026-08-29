@@ -109,9 +109,10 @@ export default function Lab() {
   const lines = selectedId ? logs[selectedId] || [] : []
 
   const teardown = (lab: LabState) => {
+    const provisioning = !['ready', 'failed'].includes(lab.step)
     if (
       !window.confirm(
-        `Tear down the lab for ${lab.sourceNamespace}? This deletes the clone app, every PVC in ${lab.labNamespace}, and their volumes.`,
+        `${provisioning ? 'Cancel provisioning and tear' : 'Tear'} down the lab for ${lab.sourceNamespace}? This deletes the clone app, every PVC in ${lab.labNamespace}, and their volumes.`,
       )
     )
       return
@@ -177,9 +178,18 @@ export default function Lab() {
                   <Timer className="mr-1 h-4 w-4" /> +24h
                 </Button>
               )}
-              {['ready', 'failed'].includes(current.step) && (
-                <Button size="sm" variant="destructive" onClick={() => teardown(current)}>
-                  Tear down
+              {!['deleted', 'tearing_down'].includes(current.step) && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={current.cancelRequested}
+                  onClick={() => teardown(current)}
+                >
+                  {['ready', 'failed'].includes(current.step)
+                    ? 'Tear down'
+                    : current.cancelRequested
+                      ? 'Cancelling…'
+                      : 'Cancel & tear down'}
                 </Button>
               )}
             </div>
@@ -205,6 +215,11 @@ export default function Lab() {
                 </span>
               )}
               {current.health && <span className="text-muted-foreground">app health: {current.health}</span>}
+              {current.restorePoint && (
+                <span className="text-muted-foreground">
+                  restore point: <span className="font-medium text-foreground">{formatWhen(current.restorePoint)}</span>
+                </span>
+              )}
             </div>
             {!!current.pvcs?.length && (
               <div className="flex flex-wrap gap-2 text-xs">
@@ -422,6 +437,11 @@ function StartLabDialog({
   const [plan, setPlan] = useState<LabPlan | null>(null)
   const [planError, setPlanError] = useState('')
   const [dataPVC, setDataPVC] = useState('')
+  // point is the chosen restore-point cutoff ('' = latest); the plan is
+  // recomputed server-side for it, so the preview always shows the exact
+  // snapshots that will restore.
+  const [point, setPoint] = useState('')
+  const [points, setPoints] = useState<string[]>([])
   const [ttlHours, setTtlHours] = useState(24)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -443,20 +463,27 @@ function StartLabDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
+  // New namespace → forget the previous namespace's restore point.
+  useEffect(() => {
+    setPoint('')
+    setPoints([])
+  }, [ns])
+
   useEffect(() => {
     if (!open || !ns) return
     setPlan(null)
     setPlanError('')
     setDataPVC('')
     api
-      .labPlan(ns)
+      .labPlan(ns, point || undefined)
       .then((p) => {
         setPlan(p)
+        setPoints(p.restorePoints || [])
         setDataPVC(p.pvcs.find((x) => x.sourceExists)?.pvcName || '')
         setTier((t) => (p.app ? t : 'data'))
       })
       .catch((e: Error) => setPlanError(e.message))
-  }, [open, ns])
+  }, [open, ns, point])
 
   const appAvailable = !!plan?.app
   const canStart =
@@ -468,8 +495,10 @@ function StartLabDialog({
     setError('')
     const body =
       tier === 'app'
-        ? { sourceNamespace: ns, tier: 'app' as const, ttlHours }
+        ? { sourceNamespace: ns, tier: 'app' as const, ttlHours, before: point || undefined }
         : {
+            // Data tier: the snapshot comes from the point-filtered plan, so
+            // the chosen restore point is already baked in.
             sourceNamespace: ns,
             tier: 'data' as const,
             ttlHours,
@@ -515,6 +544,29 @@ function StartLabDialog({
             ))}
           </select>
         </div>
+        {points.length > 0 && (
+          <div className="space-y-2">
+            <label htmlFor="lab-point" className="text-sm font-medium">
+              Restore point
+            </label>
+            <select
+              id="lab-point"
+              value={point}
+              onChange={(e) => setPoint(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">Latest</option>
+              {points.map((p) => (
+                <option key={p} value={p}>
+                  {formatWhen(p)}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Each PVC (and the SQL dump) restores from its newest snapshot at or before this point.
+            </p>
+          </div>
+        )}
         {planError && <Alert variant="danger">{planError}</Alert>}
         {plan && (
           <>

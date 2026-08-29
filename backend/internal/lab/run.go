@@ -14,18 +14,45 @@ import (
 // run provisions a lab: PVCs → Restore CRs → (app tier) clone Application →
 // SQL dump replay → ready. Everything lands in the lab namespace only.
 func (m *Manager) run(st *State) {
-	ctx := context.Background()
+	// ctx is cancelled by Teardown on a provisioning lab; the deferred state
+	// handling below then reports the run as cancelled rather than failed,
+	// and the teardown goroutine waits on `done` before touching resources.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	m.mu.Lock()
+	m.cancels[st.LabID] = cancel
+	m.dones[st.LabID] = done
+	m.mu.Unlock()
 	var runErr error
 
 	defer func() {
-		if runErr == nil {
-			return
+		cancel()
+		m.mu.Lock()
+		delete(m.cancels, st.LabID)
+		cancelled := st.CancelRequested
+		// Belt-and-braces: Teardown flags the jobs-map entry; honor it even
+		// if something replaced the pointer this goroutine holds.
+		if j, ok := m.jobs[st.LabID]; ok && j.CancelRequested {
+			cancelled = true
+			st.CancelRequested = true
 		}
-		st.Step = StepFailed
-		st.LastError = runErr.Error()
-		m.set(st)
-		m.emitLog(st.LabID, "LAB FAILED: "+runErr.Error())
-		m.recordDrill(st, "failed", runErr.Error())
+		m.mu.Unlock()
+		if runErr != nil {
+			st.Step = StepFailed
+			if cancelled {
+				// No drill row: a cancelled run is not restore evidence either
+				// way — the namespace's previous verification stands.
+				st.LastError = "lab cancelled by operator"
+				m.set(st)
+				m.emitLog(st.LabID, "··· provisioning aborted (cancel requested)")
+			} else {
+				st.LastError = runErr.Error()
+				m.set(st)
+				m.emitLog(st.LabID, "LAB FAILED: "+runErr.Error())
+				m.recordDrill(st, "failed", runErr.Error())
+			}
+		}
+		close(done)
 	}()
 
 	// 1. Pre-create the restored PVCs with their production names/specs so the
@@ -326,8 +353,10 @@ func (m *Manager) recordDrill(st *State, status, detail string) {
 	})
 }
 
-// Teardown removes everything a lab created; may be called on a ready or
-// failed lab (and by the TTL loop). Runs asynchronously.
+// Teardown removes everything a lab created. Callable from ANY live step:
+// a provisioning run is cancelled first (its Restore CR wait aborts, the
+// deferred handler marks it cancelled), then resources are removed once the
+// run goroutine has fully stopped. Also driven by the TTL loop. Asynchronous.
 func (m *Manager) Teardown(id, actor string) error {
 	m.mu.Lock()
 	st, ok := m.jobs[id]
@@ -336,25 +365,55 @@ func (m *Manager) Teardown(id, actor string) error {
 		return fmt.Errorf("lab %s not found", id)
 	}
 	switch st.Step {
-	case StepReady, StepFailed:
-		// tearable
 	case StepTearingDown:
 		m.mu.Unlock()
 		return fmt.Errorf("lab %s teardown already in progress", id)
 	case StepDeleted:
 		m.mu.Unlock()
 		return fmt.Errorf("lab %s is already torn down", id)
-	default:
+	case StepReady, StepFailed:
+		st.Step = StepTearingDown
+		st.TornDownBy = actor
+		cp := *st
 		m.mu.Unlock()
-		return fmt.Errorf("lab %s is provisioning (step %s); wait for it to become ready or fail", id, st.Step)
+		m.set(&cp)
+		go m.teardown(&cp, actor)
+		return nil
+	default:
+		// Provisioning: cancel the run, wait for it to stop, then tear down.
+		st.CancelRequested = true
+		st.TornDownBy = actor
+		cancel := m.cancels[id]
+		done := m.dones[id]
+		cp := *st
+		m.mu.Unlock()
+		m.set(&cp)
+		m.emitLog(id, fmt.Sprintf("··· cancel requested by %s — aborting provisioning, then tearing down", actor))
+		if cancel != nil {
+			cancel()
+		}
+		go func() {
+			if done != nil {
+				select {
+				case <-done:
+				case <-time.After(3 * time.Minute):
+					m.emitLog(id, "··· run did not stop within 3m; tearing down anyway")
+				}
+			}
+			m.mu.Lock()
+			j, ok := m.jobs[id]
+			if !ok || j.Step == StepTearingDown || j.Step == StepDeleted {
+				m.mu.Unlock()
+				return
+			}
+			j.Step = StepTearingDown
+			cp2 := *j
+			m.mu.Unlock()
+			m.set(&cp2)
+			m.teardown(&cp2, actor)
+		}()
+		return nil
 	}
-	st.Step = StepTearingDown
-	st.TornDownBy = actor
-	cp := *st
-	m.mu.Unlock()
-	m.set(&cp)
-	go m.teardown(&cp, actor)
-	return nil
 }
 
 func (m *Manager) teardown(st *State, actor string) {
@@ -427,4 +486,7 @@ func (m *Manager) teardown(st *State, actor string) {
 			Status: status, Detail: detail, RestoreID: st.LabID,
 		})
 	}
+	m.mu.Lock()
+	delete(m.dones, st.LabID)
+	m.mu.Unlock()
 }

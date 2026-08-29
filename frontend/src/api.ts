@@ -125,6 +125,8 @@ export type LabState = {
   lastError?: string
   actor?: string
   tornDownBy?: string
+  restorePoint?: string
+  cancelRequested?: boolean
 }
 
 export type LabOverview = {
@@ -153,6 +155,8 @@ export type LabPlan = {
   }>
   dump?: { snapshotName: string; snapshotId: string; path: string; date: string }
   warnings?: string[]
+  before?: string
+  restorePoints: string[]
 }
 
 export type DrillStatus = {
@@ -432,13 +436,16 @@ export const api = {
   jobConsoleUrl: (kind: string, namespace: string, name: string) =>
     `/api/v1/jobs/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`,
   lab: () => req<LabOverview>('/api/v1/lab'),
-  labPlan: (namespace: string) =>
-    req<LabPlan>(`/api/v1/lab/plan?namespace=${encodeURIComponent(namespace)}`),
+  labPlan: (namespace: string, before?: string) =>
+    req<LabPlan>(
+      `/api/v1/lab/plan?namespace=${encodeURIComponent(namespace)}${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+    ),
   labStart: (body: {
     sourceNamespace: string
     tier: 'data' | 'app'
     snapshotName?: string
     pvcName?: string
+    before?: string
     ttlHours?: number
   }) => req<LabState>('/api/v1/lab', { method: 'POST', body: JSON.stringify(body) }),
   labTeardown: (id: string) =>

@@ -16,12 +16,18 @@ import (
 // Plan is what an app-lab run would do, shown in the confirm dialog before
 // anything is created.
 type Plan struct {
-	SourceNamespace string      `json:"sourceNamespace"`
-	App             *PlanApp    `json:"app,omitempty"`
-	AppError        string      `json:"appError,omitempty"`
-	PVCs            []PlanPVC   `json:"pvcs"`
-	Dump            *PlanDump   `json:"dump,omitempty"`
-	Warnings        []string    `json:"warnings,omitempty"`
+	SourceNamespace string    `json:"sourceNamespace"`
+	App             *PlanApp  `json:"app,omitempty"`
+	AppError        string    `json:"appError,omitempty"`
+	PVCs            []PlanPVC `json:"pvcs"`
+	Dump            *PlanDump `json:"dump,omitempty"`
+	Warnings        []string  `json:"warnings,omitempty"`
+	// Before is the restore point the plan was computed for (nil = latest).
+	Before *time.Time `json:"before,omitempty"`
+	// RestorePoints are the distinct snapshot times available in the source
+	// namespace (newest first, capped) — the choices for `before`. Always
+	// computed over ALL snapshots, so the UI can re-pick after filtering.
+	RestorePoints []time.Time `json:"restorePoints"`
 }
 
 type PlanApp struct {
@@ -47,9 +53,10 @@ type PlanDump struct {
 	Date         time.Time `json:"date"`
 }
 
-// Plan computes the newest restore point per source PVC plus the newest SQL
-// dump snapshot, and resolves the Argo Application the clone would come from.
-func (m *Manager) Plan(ctx context.Context, sourceNS string) (*Plan, error) {
+// Plan computes the newest snapshot per source PVC plus the newest SQL dump
+// snapshot — at or before the given restore point (nil = latest) — and
+// resolves the Argo Application the clone would come from.
+func (m *Manager) Plan(ctx context.Context, sourceNS string, before *time.Time) (*Plan, error) {
 	if sourceNS == m.LabNamespace {
 		return nil, fmt.Errorf("cannot plan a lab for the lab namespace itself")
 	}
@@ -57,8 +64,9 @@ func (m *Manager) Plan(ctx context.Context, sourceNS string) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list snapshots in %s: %w", sourceNS, err)
 	}
-	plan := &Plan{SourceNamespace: sourceNS}
-	pvcs, dump := planFromSnapshots(snaps.Items)
+	plan := &Plan{SourceNamespace: sourceNS, Before: before}
+	plan.RestorePoints = restorePoints(snaps.Items, 60)
+	pvcs, dump := planFromSnapshots(snaps.Items, before)
 	plan.Dump = dump
 
 	for i := range pvcs {
@@ -72,6 +80,9 @@ func (m *Manager) Plan(ctx context.Context, sourceNS string) (*Plan, error) {
 	plan.PVCs = pvcs
 
 	if len(plan.PVCs) == 0 && plan.Dump == nil {
+		if before != nil {
+			return nil, fmt.Errorf("namespace %s has no snapshots at or before %s", sourceNS, before.Format(time.RFC3339))
+		}
 		return nil, fmt.Errorf("namespace %s has no restorable snapshots", sourceNS)
 	}
 
@@ -97,8 +108,9 @@ func (m *Manager) Plan(ctx context.Context, sourceNS string) (*Plan, error) {
 }
 
 // planFromSnapshots groups a namespace's Snapshot CRs into the newest
-// restore point per source PVC plus the newest application-level SQL dump.
-func planFromSnapshots(items []unstructured.Unstructured) ([]PlanPVC, *PlanDump) {
+// snapshot per source PVC plus the newest application-level SQL dump, at or
+// before the given restore point (nil = no cutoff).
+func planFromSnapshots(items []unstructured.Unstructured, before *time.Time) ([]PlanPVC, *PlanDump) {
 	latestByPVC := map[string]PlanPVC{}
 	var dump *PlanDump
 	for i := range items {
@@ -106,6 +118,9 @@ func planFromSnapshots(items []unstructured.Unstructured) ([]PlanPVC, *PlanDump)
 		name := items[i].GetName()
 		id := snapshotID(obj, name)
 		date := snapshotDate(&items[i])
+		if before != nil && date.After(*before) {
+			continue
+		}
 		paths := snapshotPaths(obj)
 
 		if p := restore.DumpFilePath(paths); p != "" {
@@ -127,6 +142,27 @@ func planFromSnapshots(items []unstructured.Unstructured) ([]PlanPVC, *PlanDump)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PVCName < out[j].PVCName })
 	return out, dump
+}
+
+// restorePoints returns the distinct snapshot times, newest first, capped.
+func restorePoints(items []unstructured.Unstructured, max int) []time.Time {
+	seen := map[time.Time]bool{}
+	out := make([]time.Time, 0, len(items))
+	// Exact times, never truncated: each point must include its own snapshot
+	// when used as the `before` cutoff.
+	for i := range items {
+		d := snapshotDate(&items[i])
+		if d.IsZero() || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].After(out[j]) })
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }
 
 func snapshotDate(obj *unstructured.Unstructured) time.Time {

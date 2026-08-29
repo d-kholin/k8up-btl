@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/d-kholin/k8up-gui/internal/audit"
 	"github.com/d-kholin/k8up-gui/internal/auth"
@@ -74,7 +75,16 @@ func (s *Server) handleLabPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "namespace query parameter required", http.StatusBadRequest)
 		return
 	}
-	plan, err := s.Lab.Plan(r.Context(), ns)
+	var before *time.Time
+	if v := r.URL.Query().Get("before"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "before must be RFC3339", http.StatusBadRequest)
+			return
+		}
+		before = &t
+	}
+	plan, err := s.Lab.Plan(r.Context(), ns, before)
 	if err != nil {
 		s.writeErr(w, err, http.StatusBadRequest)
 		return

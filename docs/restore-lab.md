@@ -26,7 +26,10 @@ entry — the dashboard shows *last verified restore per app*.
 1. k8up-btl resolves the app's Argo `Application` (by destination namespace)
    and plans the run: the newest snapshot per source PVC, plus the newest
    `.sql` dump snapshot if the app backs its database up with a
-   `k8up.io/backupcommand`.
+   `k8up.io/backupcommand`. Picking a **restore point** in the start dialog
+   moves that cutoff: every PVC (and the dump) restores from its newest
+   snapshot *at or before* the chosen time, so the whole lab is one
+   consistent point-in-time.
 2. PVCs are pre-created in the lab namespace with their production names and
    specs, then filled by K8up `Restore` CRs whose `backend.s3.bucket` points at
    the **source** namespace's repository (credentials come from the operator's
@@ -58,7 +61,10 @@ Data-tier labs skip steps 1/3/4: one PVC, one Restore CR, then a
 `filebrowser` pod mounting the volume read-only.
 
 One lab at a time (mirroring the single-restore rule); a failed lab must be
-torn down before the next one starts.
+torn down before the next one starts. Teardown works at **any** step: on a
+provisioning lab it cancels the run first (the in-flight Restore CR is
+deleted, no drill evidence is recorded for a cancelled run), then removes
+everything the lab created.
 
 ## Isolation (why the lab is safe)
 

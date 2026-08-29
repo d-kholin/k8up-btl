@@ -51,8 +51,10 @@ spec:
     - to:
         - podSelector: {}
 ---
-# K8up job pods (restic restore) must reach the S3 backend. K8up labels its
-# job pods with k8up.io/owned-by; scope the egress hole to those.
+# K8up job pods (restic restore) must reach the S3 backend. K8up puts
+# k8up.io/owned-by on the JOB only; the POD carries `k8upjob: "true"` — and
+# NetworkPolicies select pods. (Verified against a live restore job; the
+# wrong selector surfaces as `connection refused` dialing the S3 endpoint.)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -60,9 +62,8 @@ metadata:
   namespace: restore-lab
 spec:
   podSelector:
-    matchExpressions:
-      - key: k8up.io/owned-by
-        operator: Exists
+    matchLabels:
+      k8upjob: "true"
   policyTypes:
     - Egress
   egress:

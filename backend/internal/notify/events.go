@@ -159,7 +159,11 @@ func LabOutcomeEvent(st lab.State) (Event, bool) {
 	case lab.StepFailed:
 		title := "Restore lab FAILED: " + target
 		if strings.Contains(st.LastError, "teardown") {
+			// Leaked resources always alert — even on a cancelled lab.
 			title = "Restore lab teardown incomplete: " + target
+		} else if st.CancelRequested {
+			// Operator-requested cancels are not failures worth alerting on.
+			return Event{}, false
 		}
 		body := fmt.Sprintf("Lab %s (%s tier) for %s failed.\nError: %s\n", st.LabID, st.Tier, st.SourceNamespace, st.LastError)
 		return Event{

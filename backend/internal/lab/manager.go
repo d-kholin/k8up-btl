@@ -75,6 +75,10 @@ type State struct {
 	LastError       string     `json:"lastError,omitempty"`
 	Actor           string     `json:"actor,omitempty"`
 	TornDownBy      string     `json:"tornDownBy,omitempty"` // username or "ttl"
+	// RestorePoint is the chosen point-in-time cutoff (nil = latest).
+	RestorePoint *time.Time `json:"restorePoint,omitempty"`
+	// CancelRequested is set when teardown aborts a provisioning run.
+	CancelRequested bool `json:"cancelRequested,omitempty"`
 }
 
 // Active reports whether the lab still occupies the single-lab slot: only a
@@ -87,6 +91,9 @@ type Request struct {
 	// Data tier: the one snapshot/PVC to restore.
 	SnapshotName string `json:"snapshotName,omitempty"`
 	PVCName      string `json:"pvcName,omitempty"`
+	// Before picks the restore point (RFC3339): app-tier snapshots are the
+	// newest at or before this time. Empty = latest.
+	Before string `json:"before,omitempty"`
 	// TTLHours overrides the default lab lifetime (0 = default).
 	TTLHours int    `json:"ttlHours,omitempty"`
 	Actor    string `json:"-"`
@@ -119,6 +126,10 @@ type Manager struct {
 
 	mu   sync.Mutex
 	jobs map[string]*State
+	// cancels aborts a provisioning run; dones closes when its goroutine has
+	// fully finished (teardown waits on it before touching resources).
+	cancels map[string]context.CancelFunc
+	dones   map[string]chan struct{}
 }
 
 func NewManager(c *k8s.Clients, store *audit.Store, log *slog.Logger) *Manager {
@@ -135,6 +146,8 @@ func NewManager(c *k8s.Clients, store *audit.Store, log *slog.Logger) *Manager {
 		DeployTimeout:   20 * time.Minute,
 		TeardownTimeout: 15 * time.Minute,
 		jobs:            map[string]*State{},
+		cancels:         map[string]context.CancelFunc{},
+		dones:           map[string]chan struct{}{},
 	}
 }
 
@@ -330,6 +343,14 @@ func (m *Manager) Start(ctx context.Context, req Request) (*State, error) {
 		}
 		ttl = time.Duration(req.TTLHours) * time.Hour
 	}
+	var before *time.Time
+	if req.Before != "" {
+		t, err := time.Parse(time.RFC3339, req.Before)
+		if err != nil {
+			return nil, fmt.Errorf("before must be RFC3339: %w", err)
+		}
+		before = &t
+	}
 
 	id := uuid.NewString()
 	st := &State{
@@ -340,6 +361,7 @@ func (m *Manager) Start(ctx context.Context, req Request) (*State, error) {
 		Step:            StepQueued,
 		StartedAt:       time.Now().UTC(),
 		Actor:           req.Actor,
+		RestorePoint:    before,
 	}
 
 	var plan *Plan
@@ -365,7 +387,7 @@ func (m *Manager) Start(ctx context.Context, req Request) (*State, error) {
 		}}
 	case TierApp:
 		var err error
-		plan, err = m.Plan(ctx, req.SourceNamespace)
+		plan, err = m.Plan(ctx, req.SourceNamespace, before)
 		if err != nil {
 			return nil, err
 		}
