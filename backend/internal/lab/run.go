@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/d-kholin/k8up-gui/internal/audit"
@@ -91,13 +92,35 @@ func (m *Manager) run(st *State) {
 				runErr = fmt.Errorf("create restore CR for %s: %w", p.PVCName, err)
 				return
 			}
+			// K8up can report a Restore CR Succeeded even when restic wrote
+			// nothing ("Fatal: There were N errors" — seen live when a
+			// non-root job pod couldn't write a fresh PVC). A drill that
+			// deploys an app over an empty volume is a false-positive
+			// verification, so watch the job log for restic's fatal marker
+			// and fail the part regardless of CR status.
+			var resticFatal atomic.Bool
 			rctx, cancel := context.WithTimeout(ctx, m.RestoreTimeout)
 			go func() {
 				_ = m.Clients.FollowRestoreJobLogs(rctx, st.LabNamespace, crName, func(line string) {
 					m.emitLog(st.LabID, line)
+					if strings.Contains(line, "Fatal:") {
+						resticFatal.Store(true)
+					}
 				})
 			}()
 			err = m.Clients.WaitJobDone(rctx, k8s.GVRRestore, st.LabNamespace, crName)
+			if err == nil {
+				// Grace for trailing log lines before trusting the status.
+				t := time.NewTimer(2 * time.Second)
+				select {
+				case <-rctx.Done():
+					t.Stop()
+				case <-t.C:
+				}
+				if resticFatal.Load() {
+					err = fmt.Errorf("restic reported fatal errors despite the Restore CR succeeding — the volume was likely not written (see the lab log)")
+				}
+			}
 			cancel()
 			if err != nil {
 				p.Status = "failed"

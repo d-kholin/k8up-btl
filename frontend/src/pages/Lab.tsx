@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { FlaskConical, ShieldCheck, Timer } from 'lucide-react'
 import { api, type DrillStatus, type LabOverview, type LabPlan, type LabState } from '../api'
 import { cn, formatAge, formatWhen } from '../lib/utils'
+import RestorePointCalendar from '../components/RestorePointCalendar'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -408,8 +409,10 @@ export default function Lab() {
       <StartLabDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        onStarted={() => {
+        onStarted={(st) => {
           setDialogOpen(false)
+          // Focus the NEW lab's log, not whatever was selected before.
+          setSelectedId(st.labId)
           load()
         }}
         onError={setError}
@@ -428,7 +431,7 @@ function StartLabDialog({
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
-  onStarted: () => void
+  onStarted: (st: LabState) => void
   onError: (msg: string) => void
 }) {
   const [namespaces, setNamespaces] = useState<string[]>([])
@@ -507,7 +510,7 @@ function StartLabDialog({
           }
     api
       .labStart(body)
-      .then(() => onStarted())
+      .then((st) => onStarted(st))
       .catch((e: Error) => {
         setError(e.message)
         onError('')
@@ -546,22 +549,8 @@ function StartLabDialog({
         </div>
         {points.length > 0 && (
           <div className="space-y-2">
-            <label htmlFor="lab-point" className="text-sm font-medium">
-              Restore point
-            </label>
-            <select
-              id="lab-point"
-              value={point}
-              onChange={(e) => setPoint(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">Latest</option>
-              {points.map((p) => (
-                <option key={p} value={p}>
-                  {formatWhen(p)}
-                </option>
-              ))}
-            </select>
+            <span className="text-sm font-medium">Restore point</span>
+            <RestorePointCalendar points={points} value={point} onChange={setPoint} />
             <p className="text-xs text-muted-foreground">
               Each PVC (and the SQL dump) restores from its newest snapshot at or before this point.
             </p>

@@ -253,10 +253,13 @@ func (c *Clients) CreateLabPVC(ctx context.Context, labNS, name, labID string, m
 }
 
 // CreateLabRestoreCR creates a Restore CR in the lab namespace. Unlike
-// CreateRestoreCR it inherits nothing from a Schedule: the lab namespace is
-// PSA baseline, K8up's default (root) restore pod preserves file ownership,
-// and the backend bucket is passed in explicitly (it points at the SOURCE
-// namespace's repository).
+// CreateRestoreCR it inherits nothing from a Schedule; the backend bucket is
+// passed in explicitly (it points at the SOURCE namespace's repository).
+// The pod runs as root ON PURPOSE: the k8up image defaults to a non-root
+// user (65532) which cannot write a freshly provisioned PVC (root:root 755)
+// — restic then "restores" 0 bytes while K8up may still report Succeeded.
+// Root writes fine and preserves the snapshot's file ownership, exactly like
+// a real disaster recovery; the lab namespace is PSA baseline to allow it.
 func (c *Clients) CreateLabRestoreCR(ctx context.Context, labNS, name, snapshotID, claimName string, backend map[string]any) (*unstructured.Unstructured, error) {
         spec := map[string]any{
                 "snapshot": snapshotID,
@@ -264,6 +267,11 @@ func (c *Clients) CreateLabRestoreCR(ctx context.Context, labNS, name, snapshotI
                         "folder": map[string]any{
                                 "claimName": claimName,
                         },
+                },
+                "podSecurityContext": map[string]any{
+                        "runAsUser":    int64(0),
+                        "runAsGroup":   int64(0),
+                        "runAsNonRoot": false,
                 },
         }
         if backend != nil {
