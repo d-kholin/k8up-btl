@@ -14,7 +14,7 @@ export default function Restores() {
   const [error, setError] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [logs, setLogs] = useState<Record<string, string[]>>({})
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logBoxRef = useRef<HTMLDivElement>(null)
   const stickBottom = useRef(true)
 
   const load = () =>
@@ -88,10 +88,16 @@ export default function Restores() {
       })
   }, [selectedId])
 
+  // Re-pin to the tail when switching jobs, then keep the LOG BOX (never the
+  // page) pinned while new lines stream in — scrollIntoView would drag every
+  // scrollable ancestor down with it.
   useEffect(() => {
-    if (stickBottom.current) {
-      logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    stickBottom.current = true
+  }, [selectedId])
+
+  useEffect(() => {
+    const el = logBoxRef.current
+    if (stickBottom.current && el) el.scrollTop = el.scrollHeight
   }, [logs, selectedId])
 
   const selected = useMemo(
@@ -253,6 +259,7 @@ export default function Restores() {
               )}
             {/* Independent scrollport: fills remaining card height; does not grow the page */}
             <div
+              ref={logBoxRef}
               className="h-[55dvh] overflow-y-auto overscroll-contain rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none] lg:h-auto lg:min-h-0 lg:flex-1"
               onWheel={(e) => {
                 // Keep wheel inside this pane even when main/page would otherwise chain-scroll.
@@ -276,7 +283,6 @@ export default function Restores() {
                   </div>
                 ))
               )}
-              <div ref={logEndRef} />
             </div>
             {selected && (
               <div className="mt-3 flex shrink-0 flex-wrap gap-2 text-xs text-muted-foreground">

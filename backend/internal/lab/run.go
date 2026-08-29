@@ -194,7 +194,7 @@ func (m *Manager) run(st *State) {
 		st.Services = svcs
 		for _, s := range svcs {
 			for _, p := range s.Ports {
-				m.emitLog(st.LabID, fmt.Sprintf("··· connect: %s.%s.svc.cluster.local:%d  (or: kubectl -n %s port-forward svc/%s %d)", s.Name, st.LabNamespace, p, st.LabNamespace, s.Name, p))
+				m.emitLog(st.LabID, fmt.Sprintf("··· connect: %s.%s.svc.cluster.local:%d  (or: kubectl -n %s port-forward svc/%s %d:%d)", s.Name, st.LabNamespace, p, st.LabNamespace, s.Name, localForwardPort(p), p))
 			}
 		}
 	} else {
@@ -209,6 +209,15 @@ func (m *Manager) run(st *State) {
 		m.emitLog(st.LabID, fmt.Sprintf("LAB READY — auto-teardown at %s (extend from the Lab page)", st.ExpiresAt.Format(time.RFC3339)))
 	}
 	m.recordDrill(st, "success", "")
+}
+
+// localForwardPort picks the local half of a suggested port-forward: binding
+// a privileged port (<1024) needs root, so 80→8080, 443→8443, etc.
+func localForwardPort(p int32) int32 {
+	if p < 1024 {
+		return p + 8000
+	}
+	return p
 }
 
 // waitAppHealthy polls the clone Application until its one-shot sync has

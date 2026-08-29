@@ -26,6 +26,12 @@ function stepBadge(step: string) {
   return <Badge variant="warning">{step.replaceAll('_', ' ')}</Badge>
 }
 
+// Local half of a suggested port-forward: binding a privileged port (<1024)
+// needs root, so 80→8080, 443→8443 etc.; unprivileged ports map to themselves.
+function localPort(p: number) {
+  return p < 1024 ? p + 8000 : p
+}
+
 function verdictBadge(lab: LabState) {
   if (!lab.verdict) return null
   return (
@@ -41,7 +47,7 @@ export default function Lab() {
   const [logs, setLogs] = useState<Record<string, string[]>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [, setTick] = useState(0) // re-render for TTL countdown
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logBoxRef = useRef<HTMLDivElement>(null)
   const stickBottom = useRef(true)
 
   const load = () =>
@@ -105,8 +111,16 @@ export default function Lab() {
       .catch(() => {})
   }, [selectedId])
 
+  // Re-pin to the tail when switching labs, then keep the LOG BOX (never the
+  // page) pinned while new lines stream in — scrollIntoView would drag every
+  // scrollable ancestor down with it.
   useEffect(() => {
-    if (stickBottom.current) logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    stickBottom.current = true
+  }, [selectedId])
+
+  useEffect(() => {
+    const el = logBoxRef.current
+    if (stickBottom.current && el) el.scrollTop = el.scrollHeight
   }, [logs, selectedId])
 
   const current = overview?.current || null
@@ -254,7 +268,7 @@ export default function Lab() {
                             {s.name}.{current.labNamespace}.svc.cluster.local:{p}
                           </span>
                           <span className="font-mono text-muted-foreground">
-                            kubectl -n {current.labNamespace} port-forward svc/{s.name} {p}
+                            kubectl -n {current.labNamespace} port-forward svc/{s.name} {localPort(p)}:{p}
                           </span>
                         </div>
                       )),
@@ -326,7 +340,8 @@ export default function Lab() {
         </CardHeader>
         <CardContent>
           <div
-            className="h-[40dvh] overflow-y-auto overscroll-contain rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none]"
+            ref={logBoxRef}
+            className="h-[40dvh] overflow-y-auto rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none]"
             onScroll={(e) => {
               const el = e.currentTarget
               stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
@@ -343,7 +358,6 @@ export default function Lab() {
                 </div>
               ))
             )}
-            <div ref={logEndRef} />
           </div>
         </CardContent>
       </Card>
