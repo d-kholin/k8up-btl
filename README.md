@@ -1,164 +1,100 @@
 # k8up btl (ketchup bottle)
 
-Web GUI for [K8up](https://k8up.io/) backup visibility and **Argo CD-aware** one-click restores.
-Formerly referred to as k8up-gui; product name is **k8up btl**. Cluster resources use the `k8up-btl` name.
+A web UI for [K8up](https://k8up.io/) on Argo CD–managed clusters: see your whole backup
+posture at a glance, restore with one click, and **prove** your backups actually restore.
 
-**Status:** greenfield scaffold (v0). Core restore orchestration, API surface, UI shell, and in-cluster manifests are in place; live cluster wiring and Prometheus metric names still need validation (see open questions in the PRD).
+![Dashboard](docs/images/dashboard.png)
 
-## Why
+## Features
 
-Restoring a PVC with K8up on an Argo CD–managed cluster is a multi-step dance (pause sync → scale down → Restore CR → scale up → resume sync). This app automates that flow server-side so an operator never touches Argo or kubectl for routine restores.
+- **Dashboard** — restore points, dedup stats, backup activity heatmap, and per-namespace
+  freshness vs schedule cadence, with a warning for namespaces that have PVCs but no Schedule.
+- **One-click restores** — server-side orchestration of the whole Argo dance
+  (pause sync → scale down → Restore CR → scale up → resume sync), with durable mid-restore
+  state, live restic logs, progress, and cancel. Restore targets are locked to the PVC a
+  snapshot was taken from.
+- **SQL point-in-time recovery** — for `.sql` dump snapshots: quiesce the app, take a safety
+  backup, pipe the dump into the database pod via a git-declared command.
+- **Browse & compare** — read-only file tree per snapshot, file/folder downloads, and
+  `restic diff` between any two snapshots.
+- **Live job console** — streamed pod logs and a restic progress bar for any running
+  Backup/Restore/Check/Prune, plus ad-hoc Backup/Check runs that inherit the namespace Schedule.
+- **Notifications & audit** — ntfy + email alerts for job failures and restore outcomes;
+  filterable 90-day audit history with CSV export.
 
-## Features (PRD v1)
+![Restore operations](docs/images/restores.png)
 
-| Area | Capability |
-|------|------------|
-| Visibility | Cluster-wide Schedules, Snapshots, live Backup/Restore/Check/Prune status; per-namespace Workloads view with pod-level failure detail (log tail + exit reason) |
-| Restore | One-click restore with Argo pause/resume, durable mid-restore state, live progress, cancel |
-| Safety | Restore targets are locked to the PVC a snapshot was taken from (server-enforced) |
-| SQL recovery | Point-in-time recovery for `.sql` dump snapshots: quiesce the app (not the namespace), safety backup, pipe dump into the DB pod via a git-declared command, co-restore sibling PVCs — see `docs/deploy.md` |
-| Browse | Per-snapshot file tree + file/folder/snapshot download via `restic` (read-only), calendar day picker |
-| Compare | Diff two snapshots (`restic diff`): added/removed/modified files with byte deltas |
-| Notify | ntfy + email alerts for job failures, restore outcomes, interrupted restores; env config with UI overrides |
-| Actions | Ad-hoc Backup / Check CRs from the Workloads page — spec inherited from the namespace's Schedule (required: namespaces without one are refused) |
-| Console | Live per-job console for any running Backup/Restore/Check/Prune: streamed pod logs, restic progress bar, and batch-Job diagnostics (e.g. Pod Security rejections) when no pod starts |
-| Audit | 90-day restore + download history, filterable + paginated + CSV export |
-| Health | `/healthz` (liveness), `/readyz` (cluster connectivity), `/metrics` (Prometheus), degraded-mode banner |
-| Auth | No in-app auth; Pangolin + Newt NetworkPolicy only |
+## Restore Lab
 
-Full product requirements: [`docs/PRD.md`](docs/PRD.md).
+Backups you haven't restored are a hope, not a plan. The Restore Lab restores snapshots into
+an isolated, network-locked namespace — without touching the source app — so you can test them:
 
-## Adding k8up btl to an existing K8up cluster
+- **Data tier**: restore one PVC and browse the files read-only.
+- **App tier**: deploy the app's git manifests against the restored data (SQL dump replayed
+  into the clone's database), then poke at the running clone.
 
-Already running K8up and want the GUI on top? Follow
-[`docs/getting-started.md`](docs/getting-started.md) — it covers the
-per-environment manifest edits (network policy, Argo CD namespace, optional
-storage class pin), restic credentials (global secret or per-snapshot secret
-refs), and pod security for restore jobs (inherited from your Schedules).
-Argo CD is integrated but optional: with it, restores pause/resume
-reconciliation automatically; without it, the pause step is skipped.
+Pick a restore point from the calendar, and the lab shows exactly which snapshots will be
+used before anything runs. When the clone is up you get connect endpoints, the actual RTO,
+and a pass/fail verdict form — only an operator-passed test marks a namespace **verified**
+on the dashboard. Labs auto-tear-down (PVCs and retained PVs included) after a TTL.
+
+![Start a restore lab](docs/images/lab-start.png)
+
+![A lab ready to test](docs/images/lab-ready.png)
+
+See [`docs/restore-lab.md`](docs/restore-lab.md) for the isolation model and per-app setup.
+
+## Install
+
+Published image: **`ghcr.io/d-kholin/k8up-btl`** (amd64/arm64). Manifests live in
+[`deploy/k8s/`](deploy/k8s/); the Restore Lab scaffolding is a separate optional overlay in
+[`deploy/k8s/restore-lab/`](deploy/k8s/restore-lab/).
+
+```bash
+kubectl apply -k deploy/k8s
+```
+
+For GitOps, consume `deploy/k8s` as a kustomize remote base pinned to a release tag, and bump
+the `?ref=` and image tag together:
+
+```yaml
+resources:
+  - https://github.com/d-kholin/k8up-btl//deploy/k8s?ref=vX.Y.Z
+images:
+  - name: ghcr.io/d-kholin/k8up-btl
+    newTag: "X.Y.Z"
+```
+
+Adding it to an existing K8up cluster (network policy, restic credentials, Argo CD namespace,
+forward-auth headers): [`docs/getting-started.md`](docs/getting-started.md). Full deployment
+reference and configuration env vars: [`docs/deploy.md`](docs/deploy.md).
 
 ## Architecture
 
 ```
 Browser (SPA) ──REST/SSE──▶ Go backend ──client-go──▶ K8s API
                                 │                      ├─ K8up CRDs
-                                │                      ├─ Deploy/STS + Pods/PVCs
-                                │                      ├─ Argo Application CRDs
+                                │                      ├─ Deployments/STS, Pods, PVCs
+                                │                      ├─ Argo CD Application CRs
                                 │                      └─ Secrets (restic creds)
-                                └──restic subprocess──▶ S3/Garage repos
+                                └──restic subprocess──▶ S3 repos
 ```
 
-- All Kubernetes/Argo calls are **server-side only**.
-- Restore CRs are one-shot and must **not** receive Argo tracking labels.
-- Argo pause state is persisted on the Application annotation  
-  `restore-gui.local/paused-state` so a backend crash never silently leaves sync paused.
+All Kubernetes, Argo, and restic access is server-side; the browser never sees credentials.
+Auth is forward-auth headers behind your reverse proxy — there is no in-app login.
 
-## Repo layout
-
-```
-backend/          Go API + restore orchestrator + restic runner
-frontend/         React (Vite + TypeScript) SPA
-deploy/k8s/       Deployment, Service, SA, ClusterRole/Binding
-docs/PRD.md       Product requirements
-Dockerfile        Multi-stage backend+frontend+restic image
-```
-
-## Quick start (dev)
-
-### Prerequisites
-
-- Go 1.24+
-- Node 20+
-- Optional: `kubectl` + kubeconfig for live cluster mode
-- Optional: `restic` on `PATH` for browse/download
-
-### Backend
+## Development
 
 ```bash
-cd backend
-cp ../.env.example .env   # edit as needed
-go run ./cmd/server
-# listens on :8080
+# backend (:8080)
+cd backend && go run ./cmd/server
+
+# frontend (proxies /api to :8080)
+cd frontend && npm install && npm run dev
 ```
 
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-# proxies /api to :8080
-```
-
-### Config (env)
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `HTTP_ADDR` | `:8080` | Listen address |
-| `KUBECONFIG` | (in-cluster) | Out-of-cluster kubeconfig path |
-| `ARGOCD_NAMESPACE` | `argocd` | Where Application CRs live |
-| `AUDIT_DB_PATH` | `/data/audit.db` | SQLite audit log path |
-| `PROMETHEUS_URL` | _(empty)_ | Optional Prometheus base URL |
-| `GRAFANA_DASHBOARD_URL` | _(empty)_ | Link/embed target for K8up dashboard |
-| `AUTH_USER_HEADER` | `X-authentik-username` | Forward-auth identity header |
-| `AUTH_EMAIL_HEADER` | `X-authentik-email` | Forward-auth email header |
-| `DEV_AUTH_USER` | _(empty)_ | If set, trust this user when headers absent (local only) |
-| `STATIC_DIR` | _(empty)_ | If set, serve SPA from this directory |
-| `NTFY_TOPIC` | _(empty)_ | Enables ntfy notifications (job failures, restore outcomes) |
-| `NTFY_URL` | `https://ntfy.sh` | ntfy server base URL |
-| `NTFY_TOKEN` | _(empty)_ | Optional ntfy access token (Bearer) |
-| `SMTP_HOST` / `SMTP_FROM` / `SMTP_TO` | _(empty)_ | Set all three to enable email notifications |
-| `SMTP_PORT` | `587` | SMTP port |
-| `SMTP_TLS` | `starttls` | `starttls` \| `tls` (implicit, 465) \| `none` |
-| `SMTP_USERNAME` / `SMTP_PASSWORD` | _(empty)_ | Optional SMTP auth |
-| `NOTIFY_RESTORE_SUCCESS` | `true` | Also notify on successful GUI restores |
-
-With any channel configured, the backend alerts on: failed Backup/Check/Prune/Restore jobs (detected by the history sweeper, restart-safe), GUI restore completion/failure/cancellation (including "Argo still paused" attention states), and interrupted restores found at startup. Verify delivery with the **Send test** button on the Settings page (or `curl -X POST .../api/v1/notify/test`).
-
-Env vars (git-managed manifests) are the notification **baseline**; the in-app Settings page can override any field at runtime (stored in the SQLite DB on `/data`, applied without restart). Blank UI fields fall back to the env value; secrets are write-only through the API.
-
-## Deploy (cluster)
-
-Published image: **`ghcr.io/d-kholin/k8up-btl`** (multi-arch amd64/arm64 via GitHub Actions).
-
-Manifests under `deploy/k8s/` assume:
-
-- Single cluster, cluster-scoped RBAC for K8up CRDs
-- Argo CD Applications in `argocd`
-- PVC for SQLite audit DB only (`k8up-btl-data`)
-- Nodes can pull the GHCR image (public package, or pull secret if private)
-
-```bash
-kubectl apply -k deploy/k8s
-kubectl -n k8up-btl rollout status deploy/k8up-btl
-```
-
-Wire the Service behind Pangolin/Newt (ClusterIP `k8up-btl.k8up-btl.svc:80`). Full steps, pin tags/digests, and migration off the old PVC-seed path: [`docs/deploy.md`](docs/deploy.md). Adopting on a different cluster/stack: [`docs/getting-started.md`](docs/getting-started.md).
-
-Do **not** GitOps-track transient Restore CRs this app creates.
-
-## Security notes
-
-- Browser never receives SA tokens or restic passwords.
-- Browse/download path only allows read-only restic commands (`ls`, `dump`, `stats`).
-- Backend holds standing Secret read access (same secrets K8up uses) — acceptable for single-operator behind SSO; documented tradeoff in PRD §5.3.
-- Destructive actions require UI confirmation; backend still validates request shape.
-
-## Development status
-
-Scaffold implements:
-
-- [x] Project layout, PRD, Makefile, Dockerfile, K8s manifests
-- [x] Go HTTP API surface (schedules, snapshots, jobs, restore, browse, audit, SSE)
-- [x] Restore orchestrator with try/finally Argo resume + annotation durable state
-- [x] Startup interrupted-restore scanner
-- [x] SQLite audit log + 90-day prune hook
-- [x] restic runner (read-only allowlist)
-- [x] React SPA shell (routes for all primary views)
-- [ ] Live validation of K8up/Prometheus metric names on cluster
-- [ ] E2E restore against real Argo-managed workload
-- [ ] Forward-auth header names confirmed against Authentik/Traefik
+Point the backend at a cluster with `KUBECONFIG`, or run it in-cluster. SQLite (audit log,
+lab state, settings) lives at `AUDIT_DB_PATH`.
 
 ## License
 

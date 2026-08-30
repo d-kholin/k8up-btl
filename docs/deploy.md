@@ -256,3 +256,40 @@ Keep the **data** PVC (`k8up-btl-data`) — that is the audit SQLite volume.
 - RWO data volume → single replica, `Recreate` strategy.
 - Image is distroless/static + nonroot (uid 65532); root FS read-only.
 - Ephemeral smoke `deploy/ephemeral-smoke.yaml` is obsolete; prefer `deploy/k8s/`.
+
+## Configuration (env)
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `HTTP_ADDR` | `:8080` | Listen address |
+| `LOG_LEVEL` | `info` | Log level |
+| `KUBECONFIG` | (in-cluster) | Out-of-cluster kubeconfig path |
+| `ARGOCD_NAMESPACE` | `argocd` | Where Application CRs live |
+| `AUDIT_DB_PATH` | `/data/audit.db` | SQLite path (audit log, lab state, settings) |
+| `STATIC_DIR` | _(empty)_ | If set, serve the SPA from this directory |
+| `PROMETHEUS_URL` | _(empty)_ | Optional Prometheus base URL |
+| `GRAFANA_DASHBOARD_URL` | _(empty)_ | Link/embed target for a K8up dashboard |
+| `RESTIC_BINARY` | `restic` | restic binary for browse/download/diff |
+| `RESTIC_CACHE_DIR` | _(empty)_ | Optional restic cache directory |
+| `AUTH_USER_HEADER` | `X-authentik-username` | Forward-auth identity header |
+| `AUTH_EMAIL_HEADER` | `X-authentik-email` | Forward-auth email header |
+| `AUTH_DEFAULT_USER` | `operator` | Identity to assume when headers are absent |
+| `DEV_AUTH_USER` | _(empty)_ | Trust this user when headers absent (local dev only) |
+| `NTFY_TOPIC` | _(empty)_ | Enables ntfy notifications |
+| `NTFY_URL` | `https://ntfy.sh` | ntfy server base URL |
+| `NTFY_TOKEN` | _(empty)_ | Optional ntfy access token (Bearer) |
+| `SMTP_HOST` / `SMTP_FROM` / `SMTP_TO` | _(empty)_ | Set all three to enable email notifications |
+| `SMTP_PORT` | `587` | SMTP port |
+| `SMTP_TLS` | `starttls` | `starttls` \| `tls` (implicit, 465) \| `none` |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | _(empty)_ | Optional SMTP auth |
+| `NOTIFY_RESTORE_SUCCESS` | `true` | Also notify on successful GUI restores |
+| `SQL_RESTORE_CMD_<ENGINE>` | _(built-in)_ | Fallback SQL restore command per engine (postgres, postgres_all, mariadb, mysql) |
+| `RESTORE_LAB_NAMESPACE` | _(empty)_ | Lab namespace; empty disables the Restore Lab |
+| `RESTORE_LAB_TTL` | `24h` | Default lab auto-teardown TTL |
+| `RESTORE_LAB_APPPROJECT` | `restore-lab` | Argo AppProject for lab clone Applications |
+| `RESTORE_LAB_INSPECT_IMAGE` | `docker.io/filebrowser/filebrowser:v2` | Data-tier file browser image |
+
+Env vars are the notification **baseline**; the Settings page can override any notification
+field at runtime (stored in SQLite, applied without restart). Blank UI fields fall back to
+the env value; secrets are write-only through the API. Verify delivery with **Send test** on
+the Settings page.
