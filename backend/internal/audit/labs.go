@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -121,20 +122,23 @@ func (s *Store) GetLabLogs(ctx context.Context, labID string) ([]string, error) 
 }
 
 // DrillStatus is one namespace's restore-verification evidence: its most
-// recent drill and its most recent successful drill.
+// recent drill and its most recent operator-passed drill. Only a "passed"
+// verdict verifies a restore; "restored" (and legacy "success") means the
+// data came back but nobody judged it.
 type DrillStatus struct {
-	Namespace     string     `json:"namespace"`
-	LastAt        time.Time  `json:"lastAt"`
-	LastStatus    string     `json:"lastStatus"`
-	LastLabID     string     `json:"lastLabId,omitempty"`
-	LastSuccessAt *time.Time `json:"lastSuccessAt,omitempty"`
+	Namespace    string     `json:"namespace"`
+	LastAt       time.Time  `json:"lastAt"`
+	LastStatus   string     `json:"lastStatus"`
+	LastNote     string     `json:"lastNote,omitempty"`
+	LastLabID    string     `json:"lastLabId,omitempty"`
+	LastPassedAt *time.Time `json:"lastPassedAt,omitempty"`
 }
 
 // LatestDrillPerNamespace aggregates drill audit entries into per-namespace
 // evidence rows.
 func (s *Store) LatestDrillPerNamespace(ctx context.Context) ([]DrillStatus, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT a.namespace, a.status, a.at, a.restore_id
+SELECT a.namespace, a.status, a.at, a.restore_id, a.detail
 FROM audit a
 WHERE a.kind = 'drill' AND a.namespace IS NOT NULL
   AND a.id = (SELECT MAX(id) FROM audit WHERE kind = 'drill' AND namespace = a.namespace)`)
@@ -146,12 +150,17 @@ WHERE a.kind = 'drill' AND a.namespace IS NOT NULL
 	var order []string
 	for rows.Next() {
 		var ns string
-		var status, at, labID sql.NullString
-		if err := rows.Scan(&ns, &status, &at, &labID); err != nil {
+		var status, at, labID, detail sql.NullString
+		if err := rows.Scan(&ns, &status, &at, &labID, &detail); err != nil {
 			return nil, err
 		}
 		d := &DrillStatus{Namespace: ns, LastStatus: status.String, LastLabID: labID.String}
 		d.LastAt, _ = time.Parse(time.RFC3339Nano, at.String)
+		// Drill details are "tier=… app=… — <operator note or error>"; the
+		// part after the separator is the human half, surfaced in the UI.
+		if _, note, ok := strings.Cut(detail.String, " — "); ok {
+			d.LastNote = note
+		}
 		byNS[ns] = d
 		order = append(order, ns)
 	}
@@ -159,10 +168,9 @@ WHERE a.kind = 'drill' AND a.namespace IS NOT NULL
 		return nil, err
 	}
 
-	// 'success' = the lab reached ready; 'passed' = the operator's verdict.
 	srows, err := s.db.QueryContext(ctx, `
 SELECT namespace, MAX(at) FROM audit
-WHERE kind = 'drill' AND status IN ('success', 'passed') AND namespace IS NOT NULL
+WHERE kind = 'drill' AND status = 'passed' AND namespace IS NOT NULL
 GROUP BY namespace`)
 	if err != nil {
 		return nil, err
@@ -176,7 +184,7 @@ GROUP BY namespace`)
 		}
 		if d, ok := byNS[ns]; ok && at.Valid {
 			if t, err := time.Parse(time.RFC3339Nano, at.String); err == nil {
-				d.LastSuccessAt = &t
+				d.LastPassedAt = &t
 			}
 		}
 	}

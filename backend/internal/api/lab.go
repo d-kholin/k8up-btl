@@ -110,8 +110,8 @@ func (s *Server) handleLabStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// No "started" drill audit row on purpose: drill entries are outcomes
-	// (success/failed) so the verification panel never shows a run in
-	// progress as the latest evidence.
+	// (restored/passed/failed) so the verification panel never shows a run
+	// in progress as the latest evidence.
 	writeJSON(w, http.StatusAccepted, st)
 }
 

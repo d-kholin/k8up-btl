@@ -168,8 +168,9 @@ export type DrillStatus = {
   namespace: string
   lastAt: string
   lastStatus: string
+  lastNote?: string
   lastLabId?: string
-  lastSuccessAt?: string
+  lastPassedAt?: string
 }
 
 export type Meta = {

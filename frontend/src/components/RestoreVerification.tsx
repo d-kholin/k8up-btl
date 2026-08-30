@@ -9,9 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 
 type Row = {
   namespace: string
-  state: 'verified' | 'failed' | 'never'
+  state: 'verified' | 'untested' | 'failed' | 'never'
   lastAt?: string
-  lastSuccessAt?: string
+  lastPassedAt?: string
 }
 
 /** "Last verified restore per app" — the evidence panel restore drills exist
@@ -38,16 +38,19 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
       if (!d) return { namespace: ns, state: 'never' as const }
       return {
         namespace: ns,
-        // 'success' = lab reached ready; 'passed' = operator verdict.
+        // Only the operator's pass verdict verifies a restore; 'restored'
+        // (and legacy 'success') means the lab came up but nobody judged it.
         state:
-          d.lastStatus === 'success' || d.lastStatus === 'passed'
+          d.lastStatus === 'passed'
             ? ('verified' as const)
-            : ('failed' as const),
+            : d.lastStatus === 'restored' || d.lastStatus === 'success'
+              ? ('untested' as const)
+              : ('failed' as const),
         lastAt: d.lastAt,
-        lastSuccessAt: d.lastSuccessAt,
+        lastPassedAt: d.lastPassedAt,
       }
     })
-    const weight = { failed: 0, never: 1, verified: 2 }
+    const weight = { failed: 0, never: 1, untested: 2, verified: 3 }
     out.sort((a, b) => weight[a.state] - weight[b.state] || a.namespace.localeCompare(b.namespace))
     return out
   }, [schedules, drills])
@@ -63,7 +66,7 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
           {neverCount > 0 && rows.length > 0 && <Badge variant="warning">{neverCount} unproven</Badge>}
         </CardTitle>
         <CardDescription>
-          Last successful restore drill per namespace —{' '}
+          Last operator-passed restore drill per namespace —{' '}
           <Link to="/lab" className="underline-offset-2 hover:underline">
             run one in the Restore Lab
           </Link>
@@ -91,6 +94,7 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
                   <TableCell className="font-mono text-xs">{r.namespace}</TableCell>
                   <TableCell>
                     {r.state === 'verified' && <Badge variant="success">verified</Badge>}
+                    {r.state === 'untested' && <Badge variant="warning">restored — not tested</Badge>}
                     {r.state === 'failed' && <Badge variant="danger">last drill failed</Badge>}
                     {r.state === 'never' && <Badge variant="warning">never drilled</Badge>}
                   </TableCell>
@@ -98,7 +102,7 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
                     {r.lastAt ? formatWhen(r.lastAt) : '—'}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                    {r.lastSuccessAt ? formatAge(Date.now() - new Date(r.lastSuccessAt).getTime()) + ' ago' : 'never'}
+                    {r.lastPassedAt ? formatAge(Date.now() - new Date(r.lastPassedAt).getTime()) + ' ago' : 'never'}
                   </TableCell>
                 </TableRow>
               ))}

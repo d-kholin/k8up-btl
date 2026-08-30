@@ -208,7 +208,9 @@ func (m *Manager) run(st *State) {
 	if st.ExpiresAt != nil {
 		m.emitLog(st.LabID, fmt.Sprintf("LAB READY — auto-teardown at %s (extend from the Lab page)", st.ExpiresAt.Format(time.RFC3339)))
 	}
-	m.recordDrill(st, "success", "")
+	// "restored", not verified: the data came back, but only the operator's
+	// pass verdict counts as verification evidence.
+	m.recordDrill(st, "restored", "")
 }
 
 // localForwardPort picks the local half of a suggested port-forward: binding
@@ -364,9 +366,10 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// recordDrill writes the restore-verification evidence row. Success is
-// recorded the moment the lab is ready — the restore is proven then; teardown
-// is housekeeping and audits separately.
+// recordDrill writes the restore-verification evidence row. A ready lab
+// records "restored" (the data came back); the operator's verdict (recorded
+// by SetVerdict as "passed"/"failed") is what verifies it. Teardown is
+// housekeeping and audits separately.
 func (m *Manager) recordDrill(st *State, status, detail string) {
 	if m.Audit == nil {
 		return

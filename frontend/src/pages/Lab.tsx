@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FlaskConical, ShieldCheck, Timer } from 'lucide-react'
+import { Check, Copy, FlaskConical, ShieldCheck, Timer, X } from 'lucide-react'
 import { api, type DrillStatus, type LabOverview, type LabPlan, type LabState } from '../api'
 import { cn, formatAge, formatWhen } from '../lib/utils'
 import RestorePointCalendar from '../components/RestorePointCalendar'
@@ -39,6 +39,40 @@ function verdictBadge(lab: LabState) {
   )
 }
 
+/** Only an operator's pass verdict verifies a restore; "restored" (and legacy
+ * "success") means the data came back but nobody judged it yet. */
+function drillBadge(status: string) {
+  if (status === 'passed') return <Badge variant="success">verified</Badge>
+  if (status === 'restored' || status === 'success')
+    return <Badge variant="warning">restored — not tested</Badge>
+  return <Badge variant="danger">{status}</Badge>
+}
+
+function CopyBox({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1">
+      <span className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs">{text}</span>
+      <button
+        type="button"
+        title="Copy to clipboard"
+        className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        onClick={() => {
+          navigator.clipboard
+            .writeText(text)
+            .then(() => {
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1500)
+            })
+            .catch(() => {})
+        }}
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  )
+}
+
 export default function Lab() {
   const [overview, setOverview] = useState<LabOverview | null>(null)
   const [error, setError] = useState('')
@@ -55,9 +89,11 @@ export default function Lab() {
       .lab()
       .then((o) => {
         setOverview(o)
+        // Follow the active lab's log; with no lab running nothing opens by
+        // itself — the operator picks a past run from History if they want one.
         setSelectedId((cur) => {
           if (cur && o.labs.some((l) => l.labId === cur)) return cur
-          return o.current?.labId || o.labs[0]?.labId || null
+          return o.current?.labId || null
         })
       })
       .catch((e: Error) => setError(e.message))
@@ -263,13 +299,13 @@ export default function Lab() {
                   <div className="space-y-1">
                     {current.services.map((s) =>
                       (s.ports?.length ? s.ports : [80]).map((p) => (
-                        <div key={`${s.name}:${p}`} className="flex flex-wrap items-baseline gap-x-3 text-xs">
-                          <span className="font-mono">
+                        <div key={`${s.name}:${p}`} className="space-y-1">
+                          <div className="font-mono text-xs">
                             {s.name}.{current.labNamespace}.svc.cluster.local:{p}
-                          </span>
-                          <span className="font-mono text-muted-foreground">
-                            kubectl -n {current.labNamespace} port-forward svc/{s.name} {localPort(p)}:{p}
-                          </span>
+                          </div>
+                          <CopyBox
+                            text={`kubectl -n ${current.labNamespace} port-forward svc/${s.name} ${localPort(p)}:${p}`}
+                          />
                         </div>
                       )),
                     )}
@@ -306,6 +342,7 @@ export default function Lab() {
         </Card>
       )}
 
+      {selectedId && (
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
           <div>
@@ -324,19 +361,31 @@ export default function Lab() {
               )}
             </CardDescription>
           </div>
-          {overview && overview.labs.length > 1 && (
-            <select
-              value={selectedId || ''}
-              onChange={(e) => setSelectedId(e.target.value)}
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-            >
-              {overview.labs.map((l) => (
-                <option key={l.labId} value={l.labId}>
-                  {l.sourceNamespace} · {formatWhen(l.startedAt)} · {l.step}
-                </option>
-              ))}
-            </select>
-          )}
+          <div className="flex items-center gap-2">
+            {overview && overview.labs.length > 1 && (
+              <select
+                value={selectedId || ''}
+                onChange={(e) => setSelectedId(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                {overview.labs.map((l) => (
+                  <option key={l.labId} value={l.labId}>
+                    {l.sourceNamespace} · {formatWhen(l.startedAt)} · {l.step}
+                  </option>
+                ))}
+              </select>
+            )}
+            {(!current || selectedId !== current.labId) && (
+              <button
+                type="button"
+                title="Close log"
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => setSelectedId(current?.labId || null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <div
@@ -361,13 +410,16 @@ export default function Lab() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4" /> Restore verification
           </CardTitle>
-          <CardDescription>Last drill outcome per namespace — the proof that backups restore.</CardDescription>
+          <CardDescription>
+            Latest drill per namespace — verified means an operator tested the restore and marked it passed.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {drills.length === 0 ? (
@@ -379,6 +431,7 @@ export default function Lab() {
                   <TableHead>Namespace</TableHead>
                   <TableHead>Last drill</TableHead>
                   <TableHead>Outcome</TableHead>
+                  <TableHead className="hidden md:table-cell">Note</TableHead>
                   <TableHead className="hidden sm:table-cell">Last verified</TableHead>
                 </TableRow>
               </TableHeader>
@@ -389,15 +442,14 @@ export default function Lab() {
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                       {formatWhen(d.lastAt)}
                     </TableCell>
-                    <TableCell>
-                      {d.lastStatus === 'success' || d.lastStatus === 'passed' ? (
-                        <Badge variant="success">verified</Badge>
-                      ) : (
-                        <Badge variant="danger">{d.lastStatus}</Badge>
-                      )}
+                    <TableCell>{drillBadge(d.lastStatus)}</TableCell>
+                    <TableCell className="hidden max-w-[20rem] md:table-cell">
+                      <span className="block truncate text-xs text-muted-foreground" title={d.lastNote}>
+                        {d.lastNote || '—'}
+                      </span>
                     </TableCell>
                     <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
-                      {d.lastSuccessAt ? formatAge(Date.now() - new Date(d.lastSuccessAt).getTime()) + ' ago' : 'never'}
+                      {d.lastPassedAt ? formatAge(Date.now() - new Date(d.lastPassedAt).getTime()) + ' ago' : 'never'}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -410,7 +462,7 @@ export default function Lab() {
       <Card>
         <CardHeader>
           <CardTitle>History</CardTitle>
-          <CardDescription>Recent lab runs</CardDescription>
+          <CardDescription>Recent lab runs — select one to view its log</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -434,7 +486,16 @@ export default function Lab() {
                   <TableCell className="font-mono text-xs">{l.sourceNamespace}</TableCell>
                   <TableCell className="text-xs">{l.tier}</TableCell>
                   <TableCell>{stepBadge(l.step)}</TableCell>
-                  <TableCell title={l.verdictNote}>{verdictBadge(l) || <span className="text-xs text-muted-foreground">—</span>}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-col items-start gap-0.5">
+                      {verdictBadge(l) || <span className="text-xs text-muted-foreground">—</span>}
+                      {l.verdictNote && (
+                        <span className="max-w-[16rem] truncate text-xs text-muted-foreground" title={l.verdictNote}>
+                          {l.verdictNote}
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
                     {formatWhen(l.startedAt)}
                   </TableCell>
