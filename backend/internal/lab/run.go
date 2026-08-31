@@ -500,7 +500,9 @@ func (m *Manager) teardown(st *State, actor string) {
 	}
 	// Delete EVERY PVC in the lab namespace: Argo-created ones (empty database
 	// volumes) carry Delete=false sync-options in git and survive the cascade.
-	// The storage class retains PVs, so each released PV goes too.
+	// Each PV is flipped to Delete reclaim policy first so the CSI provisioner
+	// also removes the backing Longhorn volume (the lab inherits the source's
+	// Retain-policy storage class, which would otherwise orphan it).
 	if pvcs, err := m.Clients.ListLabPVCs(ctx, st.LabNamespace); err != nil {
 		errs = append(errs, fmt.Sprintf("list lab PVCs: %v", err))
 	} else {
@@ -511,7 +513,7 @@ func (m *Manager) teardown(st *State, actor string) {
 				continue
 			}
 			if pv != "" {
-				m.emitLog(st.LabID, fmt.Sprintf("··· deleted PVC %s and retained PV %s", name, pv))
+				m.emitLog(st.LabID, fmt.Sprintf("··· deleted PVC %s and backing PV %s", name, pv))
 			} else {
 				m.emitLog(st.LabID, fmt.Sprintf("··· deleted PVC %s", name))
 			}

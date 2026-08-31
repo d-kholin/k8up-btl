@@ -11,6 +11,7 @@ import (
         "k8s.io/apimachinery/pkg/api/resource"
         metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
         "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+        "k8s.io/apimachinery/pkg/types"
 )
 
 // Restore Lab helpers (docs/restore-lab.md). Everything here creates
@@ -310,9 +311,13 @@ func (c *Clients) ListLabPVCs(ctx context.Context, labNS string) ([]string, erro
         return out, nil
 }
 
-// DeleteLabPVCAndPV removes one lab PVC and, because the storage class
-// retains released volumes, its bound PV afterwards. Returns the PV name it
-// deleted ("" when the claim was unbound).
+// DeleteLabPVCAndPV removes one lab PVC and its bound PV's backing volume.
+// Lab PVCs inherit the source storage class, which retains released volumes —
+// and deleting a Retain-policy PV object never reaches the CSI driver, so the
+// Longhorn volume would be orphaned. Instead the PV is flipped to Delete
+// reclaim policy first; once the claim goes away the CSI provisioner reaps
+// both the PV and the backing volume. Returns the PV name ("" when the claim
+// was unbound).
 func (c *Clients) DeleteLabPVCAndPV(ctx context.Context, labNS, name string) (string, error) {
         pvc, err := c.Typed.CoreV1().PersistentVolumeClaims(labNS).Get(ctx, name, metav1.GetOptions{})
         if IsNotFound(err) {
@@ -322,23 +327,28 @@ func (c *Clients) DeleteLabPVCAndPV(ctx context.Context, labNS, name string) (st
                 return "", err
         }
         pvName := pvc.Spec.VolumeName
+        if pvName != "" {
+                patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}`)
+                if _, err := c.Typed.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !IsNotFound(err) {
+                        return pvName, fmt.Errorf("set PV %s reclaim policy to Delete: %w", pvName, err)
+                }
+        }
         if err := c.Typed.CoreV1().PersistentVolumeClaims(labNS).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !IsNotFound(err) {
-                return "", err
+                return pvName, err
         }
         if pvName == "" {
                 return "", nil
         }
-        // Wait for the claim to release before deleting the retained PV.
+        // Wait for the CSI provisioner to delete the released PV (and with it
+        // the backing volume). A stuck PV is surfaced as an error so teardown
+        // reports incomplete instead of leaking silently.
         for i := 0; i < 60; i++ {
-                pv, err := c.Typed.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+                _, err := c.Typed.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
                 if IsNotFound(err) {
                         return pvName, nil
                 }
                 if err != nil {
                         return pvName, err
-                }
-                if pv.Status.Phase == corev1.VolumeReleased || pv.Status.Phase == corev1.VolumeFailed {
-                        break
                 }
                 t := time.NewTimer(2 * time.Second)
                 select {
@@ -348,10 +358,7 @@ func (c *Clients) DeleteLabPVCAndPV(ctx context.Context, labNS, name string) (st
                 case <-t.C:
                 }
         }
-        if err := c.Typed.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{}); err != nil && !IsNotFound(err) {
-                return pvName, err
-        }
-        return pvName, nil
+        return pvName, fmt.Errorf("PV %s still present 2m after PVC deletion", pvName)
 }
 
 const labInspectName = "lab-inspect"
