@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test": "node tests/coverage.test.mjs",
+    "typecheck": "tsc --noEmit",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

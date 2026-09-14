@@ -546,6 +546,7 @@ func (c *Clients) ListResource(ctx context.Context, gvr schema.GroupVersionResou
 type PVCRef struct {
         Namespace string `json:"namespace"`
         Name      string `json:"name"`
+        BackupExcluded bool `json:"backupExcluded,omitempty"`
 }
 
 // ListPVCRefs returns all PVCs cluster-wide (used to spot namespaces with
@@ -557,7 +558,7 @@ func (c *Clients) ListPVCRefs(ctx context.Context) ([]PVCRef, error) {
         }
         out := make([]PVCRef, 0, len(list.Items))
         for i := range list.Items {
-                out = append(out, PVCRef{Namespace: list.Items[i].Namespace, Name: list.Items[i].Name})
+                out = append(out, PVCRef{Namespace: list.Items[i].Namespace, Name: list.Items[i].Name, BackupExcluded: list.Items[i].Annotations["k8up.io/backup"] == "false"})
         }
         return out, nil
 }

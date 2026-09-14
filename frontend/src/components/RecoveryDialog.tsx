@@ -41,6 +41,7 @@ export default function RecoveryDialog({
 
   useEffect(() => {
     if (!snapshot) return
+    let cancelled = false
     setPlan(null)
     setPlanError('')
     setError('')
@@ -49,6 +50,7 @@ export default function RecoveryDialog({
     api
       .recoveryPlan(snapshot.namespace || '', snapshot.name || '')
       .then((p) => {
+        if (cancelled) return
         setPlan(p)
         setDbPod(p.bestGuess || p.dbCandidates[0]?.podName || '')
         const init: Record<string, boolean> = {}
@@ -57,7 +59,12 @@ export default function RecoveryDialog({
         }
         setCheckedPvcs(init)
       })
-      .catch((e: Error) => setPlanError(e.message))
+      .catch((e: Error) => {
+        if (!cancelled) setPlanError(e.message)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [snapshot])
 
   const db = useMemo(
@@ -70,7 +77,7 @@ export default function RecoveryDialog({
     setBusy(true)
     setError('')
     try {
-      await api.startRecovery({
+      const result = await api.startRecovery({
         namespace: snapshot.namespace || '',
         dumpSnapshotName: snapshot.name || '',
         dbPodName: db.podName,
@@ -80,7 +87,7 @@ export default function RecoveryDialog({
           .map((o) => ({ snapshotName: o.snapshotName, pvcName: o.pvcName })),
       })
       onClose()
-      navigate('/restores')
+      navigate('/restores?id=' + encodeURIComponent(result.restoreId))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -91,7 +98,7 @@ export default function RecoveryDialog({
   const canStart = !!db?.hasRestoreCommand && !db?.blocked && confirmText === 'restore' && !busy
 
   return (
-    <Dialog open={!!snapshot} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={!!snapshot} onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Point-in-time recovery (SQL dump)</DialogTitle>
@@ -100,29 +107,34 @@ export default function RecoveryDialog({
             <span className="font-mono text-foreground">
               {snapshot?.namespace}/{snapshot?.name}
             </span>{' '}
-            into the database, stopping only this app's workloads while it runs. Argo CD is
-            paused cluster-wide for the duration.
+            into the database, stopping only this app's workloads while it runs. Argo CD is paused
+            cluster-wide for the duration.
           </DialogDescription>
         </DialogHeader>
 
         {error && <Alert variant="danger">{error}</Alert>}
         {planError && <Alert variant="danger">{planError}</Alert>}
-        {!plan && !planError && <div className="py-4 text-sm text-muted-foreground">Loading plan…</div>}
+        {!plan && !planError && (
+          <div className="py-4 text-sm text-muted-foreground">Loading plan…</div>
+        )}
 
         {plan && (
           <div className="grid gap-4 py-2">
             {plan.dbCandidates.length === 0 && (
               <Alert variant="danger">
                 No running pod in this namespace has the{' '}
-                <code className="font-mono">k8up.io/backupcommand</code> annotation — cannot
-                locate the database this dump came from.
+                <code className="font-mono">k8up.io/backupcommand</code> annotation — cannot locate
+                the database this dump came from.
               </Alert>
             )}
 
             {plan.dbCandidates.length > 1 && (
               <div className="grid gap-1.5">
-                <label className="text-xs text-muted-foreground">Database pod</label>
+                <label htmlFor="recovery-db" className="text-xs text-muted-foreground">
+                  Database pod
+                </label>
                 <select
+                  id="recovery-db"
                   className="h-9 rounded-md border border-input bg-background px-3 font-mono text-sm"
                   value={dbPod}
                   onChange={(e) => setDbPod(e.target.value)}
@@ -154,8 +166,8 @@ export default function RecoveryDialog({
                       </div>
                       {db.commandSource?.startsWith('derived') && (
                         <p className="text-[11px] text-muted-foreground">
-                          Derived from the pod's k8up.io/backupcommand (dump swapped for the
-                          client, env assignments kept). Pin a different command with the{' '}
+                          Derived from the pod's k8up.io/backupcommand (dump swapped for the client,
+                          env assignments kept). Pin a different command with the{' '}
                           <code className="font-mono">k8up-btl.local/restore-command</code>{' '}
                           annotation.
                         </p>
@@ -166,8 +178,8 @@ export default function RecoveryDialog({
                       <div className="space-y-1 text-xs">
                         <p>{db.commandError || 'No restore command could be resolved.'}</p>
                         <p>
-                          Add <code className="font-mono">k8up-btl.local/restore-command</code>{' '}
-                          to the workload's pod template in git.
+                          Add <code className="font-mono">k8up-btl.local/restore-command</code> to
+                          the workload's pod template in git.
                         </p>
                       </div>
                     </Alert>
@@ -199,8 +211,10 @@ export default function RecoveryDialog({
                   )}
                   <p className="text-[11px] text-muted-foreground">
                     The DB workload
-                    {db.workload ? ` (${db.workload.kind.toLowerCase()}/${db.workload.name})` : ''} stays
-                    up to receive the dump. Nothing outside this list is touched.
+                    {db.workload
+                      ? ` (${db.workload.kind.toLowerCase()}/${db.workload.name})`
+                      : ''}{' '}
+                    stays up to receive the dump. Nothing outside this list is touched.
                   </p>
                 </div>
               </>
@@ -244,10 +258,11 @@ export default function RecoveryDialog({
             </label>
 
             <div className="grid gap-1.5">
-              <label className="text-xs text-muted-foreground">
+              <label htmlFor="recovery-confirm" className="text-xs text-muted-foreground">
                 Type <span className="font-mono text-foreground">restore</span> to confirm
               </label>
               <Input
+                id="recovery-confirm"
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
                 placeholder="restore"
@@ -258,7 +273,7 @@ export default function RecoveryDialog({
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
             Cancel
           </Button>
           <Button variant="destructive" disabled={!canStart} onClick={submit}>

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import PageHeader from '../components/PageHeader'
+import { coverageResources } from '../lib/coverage'
 import { Play } from 'lucide-react'
 import { api, type BackupEvent, type K8sObject, type PVCRef, type StorageStats } from '../api'
 import { flattenLiveJobs, type LiveJob } from '../lib/jobs'
@@ -13,7 +15,14 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table'
 
 type Row = {
   namespace: string
@@ -39,7 +48,13 @@ export default function Workloads() {
   const [pending, setPending] = useState<LiveJob[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState('')
+  const [params, setParams] = useSearchParams()
+  const filter = params.get('q') || ''
+  const setFilter = (value: string) => setParams(value ? { q: value } : {}, { replace: true })
+  const coverage = useMemo(
+    () => coverageResources(schedules, snapshots, pvcs),
+    [schedules, snapshots, pvcs],
+  )
   const [dialogNs, setDialogNs] = useState<string | undefined>()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [consoleJob, setConsoleJob] = useState<LiveJob | null>(null)
@@ -62,16 +77,22 @@ export default function Workloads() {
         setError('')
       })
       .catch((e: Error) => {
-        if (!silent) setError(e.message)
+        setError((silent ? 'Refresh failed; showing previous data. ' : '') + e.message)
       })
       .finally(() => setLoading(false))
-    api.pvcs().then(setPvcs).catch(() => setPvcs(null))
+    api
+      .pvcs()
+      .then(setPvcs)
+      .catch(() => setPvcs(null))
     loadJobs()
   }
 
   useEffect(() => {
     refresh(false)
-    api.storageStats().then(setStorage).catch(() => {})
+    api
+      .storageStats()
+      .then(setStorage)
+      .catch(() => {})
     const t = setInterval(() => refresh(true), 60000)
     const tj = setInterval(loadJobs, 10000)
     return () => {
@@ -83,7 +104,14 @@ export default function Workloads() {
   // Poll while restic stats compute in the background (same pattern as Dashboard).
   useEffect(() => {
     if (!storage?.computing) return
-    const t = setInterval(() => api.storageStats().then(setStorage).catch(() => {}), 3000)
+    const t = setInterval(
+      () =>
+        api
+          .storageStats()
+          .then(setStorage)
+          .catch(() => {}),
+      3000,
+    )
     return () => clearInterval(t)
   }, [storage?.computing])
 
@@ -220,17 +248,15 @@ export default function Workloads() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Workloads</h1>
-          <p className="text-sm text-muted-foreground">
-            Backup state per namespace — schedules, restore points, repository usage
-          </p>
-        </div>
-        <Button onClick={() => openDialog()}>
-          <Play className="mr-1.5 h-4 w-4" /> Run backup…
-        </Button>
-      </div>
+      <PageHeader
+        title="Workloads"
+        description="Review backup coverage and run backups for each namespace."
+        actions={
+          <Button onClick={() => openDialog()}>
+            <Play className="mr-1.5 h-4 w-4" /> Run backup…
+          </Button>
+        }
+      />
       {error && <Alert variant="danger">{error}</Alert>}
 
       <ActiveJobs
@@ -252,6 +278,7 @@ export default function Workloads() {
             </CardDescription>
           </div>
           <Input
+            aria-label="Filter namespaces"
             placeholder="Filter namespaces…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -265,7 +292,7 @@ export default function Workloads() {
                 <TableHead>Namespace</TableHead>
                 <TableHead className="hidden md:table-cell">Schedule</TableHead>
                 <TableHead>Last backup</TableHead>
-                <TableHead className="hidden text-right sm:table-cell">Snapshots</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Coverage</TableHead>
                 <TableHead className="hidden text-right lg:table-cell">Stored</TableHead>
                 <TableHead />
               </TableRow>
@@ -274,7 +301,10 @@ export default function Workloads() {
               {visible.map((r) => (
                 <TableRow key={r.namespace}>
                   <TableCell className="font-mono text-xs">
-                    <Link to={`/workloads/${encodeURIComponent(r.namespace)}`} className="hover:underline">
+                    <Link
+                      to={`/workloads/${encodeURIComponent(r.namespace)}`}
+                      className="hover:underline"
+                    >
                       {r.namespace}
                     </Link>
                   </TableCell>
@@ -284,7 +314,34 @@ export default function Workloads() {
                   <TableCell>
                     <LastBackupCell row={r} />
                   </TableCell>
-                  <TableCell className="hidden text-right text-xs sm:table-cell">{r.snapshotCount}</TableCell>
+                  <TableCell className="hidden text-right text-xs sm:table-cell">
+                    {(() => {
+                      const resources = coverage.filter(
+                        (c) => c.namespace === r.namespace && c.state !== 'excluded',
+                      )
+                      const current = resources.filter((c) => c.state === 'fresh').length
+                      return (
+                        <Badge
+                          variant={
+                            !error &&
+                            pvcs !== null &&
+                            resources.length > 0 &&
+                            current === resources.length
+                              ? 'success'
+                              : 'warning'
+                          }
+                        >
+                          {error
+                            ? 'Unavailable'
+                            : current +
+                              ' / ' +
+                              resources.length +
+                              ' current' +
+                              (pvcs === null ? ' · partial' : '')}
+                        </Badge>
+                      )
+                    })()}
+                  </TableCell>
                   <TableCell className="hidden text-right text-xs lg:table-cell">
                     {formatBytes(r.storedBytes)}
                   </TableCell>
@@ -298,7 +355,9 @@ export default function Workloads() {
               {visible.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-muted-foreground">
-                    {loading ? 'Loading…' : 'No namespaces with schedules, snapshots, or PVCs found.'}
+                    {loading
+                      ? 'Loading…'
+                      : 'No namespaces with schedules, snapshots, or PVCs found.'}
                   </TableCell>
                 </TableRow>
               )}
@@ -323,7 +382,8 @@ export default function Workloads() {
               j.kind === consoleJob.kind &&
               j.namespace === consoleJob.namespace &&
               j.name === consoleJob.name,
-          ) ?? consoleJob)
+          ) ??
+            consoleJob)
         }
         open={consoleOpen}
         onOpenChange={setConsoleOpen}
@@ -350,7 +410,7 @@ function LastBackupCell({ row }: { row: Row }) {
     if (e.status === 'succeeded')
       return (
         <span className="flex items-center gap-1.5">
-          <Badge variant="success">ok</Badge>
+          <Badge variant="success">Succeeded</Badge>
           <span className="text-xs text-muted-foreground">{age} ago</span>
           {row.state === 'stale' && <Badge variant="warning">stale</Badge>}
         </span>
@@ -360,7 +420,7 @@ function LastBackupCell({ row }: { row: Row }) {
   if (row.latestSnap)
     return (
       <span className="flex items-center gap-1.5">
-        <Badge variant="success">ok</Badge>
+        <Badge variant="secondary">Snapshot found</Badge>
         <span className="text-xs text-muted-foreground">{formatAge(now - row.latestSnap)} ago</span>
         {row.state === 'stale' && <Badge variant="warning">stale</Badge>}
       </span>

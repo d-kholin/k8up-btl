@@ -44,6 +44,7 @@ export type RestoreState = {
 }
 
 export type WorkloadRef = { kind: string; namespace: string; name: string }
+export type RestorePlan = { namespace: string; pvcName: string; snapshotName: string; date: string; workload: WorkloadRef; originalReplicas: number; argoNamespace: string }
 export type ScalableWorkload = WorkloadRef & { replicas: number }
 
 export type PVCRestorePart = {
@@ -262,7 +263,7 @@ export type BackupEvent = {
   finishedAt?: string
 }
 
-export type PVCRef = { namespace: string; name: string }
+export type PVCRef = { namespace: string; name: string; backupExcluded?: boolean }
 
 export type FileNode = {
   name: string
@@ -366,6 +367,7 @@ export const api = {
     req<{ status: string }>(`/api/v1/restores/${id}/cancel`, { method: 'POST' }),
   recoveryPlan: (ns: string, name: string) =>
     req<RecoveryPlan>(`/api/v1/snapshots/${ns}/${name}/recovery-plan`),
+  restorePlan: (ns: string, name: string, pvc: string) => req<RestorePlan>(`/api/v1/snapshots/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/restore-plan?pvc=${encodeURIComponent(pvc)}`),
   startRecovery: (body: {
     namespace: string
     dumpSnapshotName: string

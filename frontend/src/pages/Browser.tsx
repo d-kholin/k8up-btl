@@ -360,10 +360,10 @@ export default function Browser() {
                   >
                     <TableCell className="font-mono text-xs">
                       {isDir ? (
-                        <span className="inline-flex items-center gap-2 text-primary">
+                        <button type="button" onClick={e => { e.stopPropagation(); navigateTo(full) }} className="inline-flex items-center gap-2 text-left text-primary">
                           <Folder className="h-4 w-4 shrink-0" />
                           <span className="hover:underline">{n.name || n.path}/</span>
-                        </span>
+                        </button>
                       ) : (
                         <span className="inline-flex items-center gap-2">
                           <File className="h-4 w-4 shrink-0 text-muted-foreground" />

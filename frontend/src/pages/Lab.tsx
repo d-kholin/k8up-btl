@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, FlaskConical, ShieldCheck, Timer, X } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Check, Copy, ShieldCheck, Timer, X } from 'lucide-react'
 import { api, type DrillStatus, type LabOverview, type LabPlan, type LabState } from '../api'
 import { cn, formatAge, formatWhen } from '../lib/utils'
 import RestorePointCalendar from '../components/RestorePointCalendar'
+import PageHeader from '../components/PageHeader'
+import ConfirmAction from '../components/ConfirmAction'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -15,7 +18,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table'
 
 const MAX_LINES = 1500
 
@@ -34,9 +44,7 @@ function localPort(p: number) {
 
 function verdictBadge(lab: LabState) {
   if (!lab.verdict) return null
-  return (
-    <Badge variant={lab.verdict === 'passed' ? 'success' : 'danger'}>test {lab.verdict}</Badge>
-  )
+  return <Badge variant={lab.verdict === 'passed' ? 'success' : 'danger'}>test {lab.verdict}</Badge>
 }
 
 /** Only an operator's pass verdict verifies a restore; "restored" (and legacy
@@ -52,7 +60,9 @@ function CopyBox({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <div className="flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1">
-      <span className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs">{text}</span>
+      <span className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs">
+        {text}
+      </span>
       <button
         type="button"
         title="Copy to clipboard"
@@ -67,17 +77,25 @@ function CopyBox({ text }: { text: string }) {
             .catch(() => {})
         }}
       >
-        {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-green-600" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
       </button>
     </div>
   )
 }
 
 export default function Lab() {
+  const [params] = useSearchParams()
+  const initialNamespace = params.get('namespace') || ''
   const [overview, setOverview] = useState<LabOverview | null>(null)
   const [error, setError] = useState('')
+  const [teardownTarget, setTeardownTarget] = useState<LabState | null>(null)
+  const [drillError, setDrillError] = useState('')
   const [drills, setDrills] = useState<DrillStatus[]>([])
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(!!initialNamespace)
   const [logs, setLogs] = useState<Record<string, string[]>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [, setTick] = useState(0) // re-render for TTL countdown
@@ -88,6 +106,7 @@ export default function Lab() {
     api
       .lab()
       .then((o) => {
+        setError('')
         setOverview(o)
         // Follow the active lab's log; with no lab running nothing opens by
         // itself — the operator picks a past run from History if they want one.
@@ -98,7 +117,14 @@ export default function Lab() {
       })
       .catch((e: Error) => setError(e.message))
 
-  const loadDrills = () => api.labVerified().then(setDrills).catch(() => {})
+  const loadDrills = () =>
+    api
+      .labVerified()
+      .then((value) => {
+        setDrills(value)
+        setDrillError('')
+      })
+      .catch((e: Error) => setDrillError(e.message))
 
   useEffect(() => {
     load()
@@ -116,7 +142,10 @@ export default function Lab() {
           setLogs((prev) => {
             const prevLines = prev[msg.labId!] || []
             const next = [...prevLines, msg.line!]
-            return { ...prev, [msg.labId!]: next.length > MAX_LINES ? next.slice(-MAX_LINES) : next }
+            return {
+              ...prev,
+              [msg.labId!]: next.length > MAX_LINES ? next.slice(-MAX_LINES) : next,
+            }
           })
         }
       } catch {
@@ -140,7 +169,10 @@ export default function Lab() {
       .then((res) => {
         setLogs((prev) => {
           const live = prev[selectedId] || []
-          const merged = res.lines.length >= live.length ? res.lines : [...res.lines, ...live.slice(res.lines.length)]
+          const merged =
+            res.lines.length >= live.length
+              ? res.lines
+              : [...res.lines, ...live.slice(res.lines.length)]
           return { ...prev, [selectedId]: merged.slice(-MAX_LINES) }
         })
       })
@@ -167,42 +199,49 @@ export default function Lab() {
   const lines = selectedId ? logs[selectedId] || [] : []
 
   const teardown = (lab: LabState) => {
-    const provisioning = !['ready', 'failed'].includes(lab.step)
-    if (
-      !window.confirm(
-        `${provisioning ? 'Cancel provisioning and tear' : 'Tear'} down the lab for ${lab.sourceNamespace}? This deletes the clone app, every PVC in ${lab.labNamespace}, and their volumes.`,
-      )
-    )
-      return
-    api.labTeardown(lab.labId).then(load).catch((e: Error) => setError(e.message))
+    setTeardownTarget(lab)
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <FlaskConical className="h-6 w-6" /> Restore Lab
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Restore snapshots into an isolated namespace — inspect the data or test the running app —
-            and prove your backups restore.
-          </p>
-        </div>
-        <Button
-          disabled={!overview?.enabled || !!current}
-          title={current ? 'One lab at a time — tear the active lab down first' : undefined}
-          onClick={() => setDialogOpen(true)}
-        >
-          Start lab
-        </Button>
-      </div>
+      <PageHeader
+        title="Restore Lab"
+        description="Test a recovery point in an isolated namespace, then record what you verified."
+        actions={
+          <Button
+            disabled={!overview?.enabled || !!current}
+            title={current ? 'One lab at a time — tear the active lab down first' : undefined}
+            onClick={() => setDialogOpen(true)}
+          >
+            Start lab
+          </Button>
+        }
+      />
+      <ol
+        aria-label="Restore lab workflow"
+        className="grid grid-cols-2 gap-3 rounded-lg border bg-card p-4 sm:grid-cols-4"
+      >
+        {['Choose recovery point', 'Restore in isolation', 'Connect & test', 'Record result'].map(
+          (label, index) => (
+            <li key={label} className="text-sm">
+              <span className="mr-2 text-primary">{index + 1}.</span>
+              {label}
+            </li>
+          ),
+        )}
+      </ol>
+      {!overview && !error && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading restore labs…
+        </p>
+      )}
       {error && <Alert variant="danger">{error}</Alert>}
       {overview && !overview.enabled && (
         <Alert variant="warning">
-          The Restore Lab is not enabled. Deploy <span className="font-mono text-xs">deploy/k8s/restore-lab</span> and
-          set <span className="font-mono text-xs">RESTORE_LAB_NAMESPACE=restore-lab</span> on the backend — see
-          docs/restore-lab.md.
+          The Restore Lab is not enabled. Deploy{' '}
+          <span className="font-mono text-xs">deploy/k8s/restore-lab</span> and set{' '}
+          <span className="font-mono text-xs">RESTORE_LAB_NAMESPACE=restore-lab</span> on the
+          backend — see docs/restore-lab.md.
         </Alert>
       )}
 
@@ -230,7 +269,10 @@ export default function Lab() {
                   size="sm"
                   variant="outline"
                   onClick={() =>
-                    api.labExtend(current.labId, 24).then(load).catch((e: Error) => setError(e.message))
+                    api
+                      .labExtend(current.labId, 24)
+                      .then(load)
+                      .catch((e: Error) => setError(e.message))
                   }
                 >
                   <Timer className="mr-1 h-4 w-4" /> +24h
@@ -267,15 +309,22 @@ export default function Lab() {
                 <span className="text-muted-foreground">
                   healthy in{' '}
                   <span className="font-medium text-foreground">
-                    {formatAge(new Date(current.healthyAt).getTime() - new Date(current.startedAt).getTime())}
+                    {formatAge(
+                      new Date(current.healthyAt).getTime() - new Date(current.startedAt).getTime(),
+                    )}
                   </span>{' '}
                   (RTO actual)
                 </span>
               )}
-              {current.health && <span className="text-muted-foreground">app health: {current.health}</span>}
+              {current.health && (
+                <span className="text-muted-foreground">app health: {current.health}</span>
+              )}
               {current.restorePoint && (
                 <span className="text-muted-foreground">
-                  restore point: <span className="font-medium text-foreground">{formatWhen(current.restorePoint)}</span>
+                  restore point:{' '}
+                  <span className="font-medium text-foreground">
+                    {formatWhen(current.restorePoint)}
+                  </span>
                 </span>
               )}
             </div>
@@ -284,12 +333,20 @@ export default function Lab() {
                 {current.pvcs.map((p) => (
                   <Badge
                     key={p.pvcName}
-                    variant={p.status === 'done' ? 'success' : p.status === 'failed' ? 'danger' : 'secondary'}
+                    variant={
+                      p.status === 'done'
+                        ? 'success'
+                        : p.status === 'failed'
+                          ? 'danger'
+                          : 'secondary'
+                    }
                   >
                     {p.pvcName} {p.status === 'done' ? '✓' : p.status || ''}
                   </Badge>
                 ))}
-                {current.dumpSnapshot && <Badge variant="secondary">SQL dump: {current.dumpPath}</Badge>}
+                {current.dumpSnapshot && (
+                  <Badge variant="secondary">SQL dump: {current.dumpPath}</Badge>
+                )}
               </div>
             )}
             {current.step === 'ready' && (
@@ -310,12 +367,14 @@ export default function Lab() {
                       )),
                     )}
                     <p className="pt-1 text-xs text-muted-foreground">
-                      Point the tunnel (Pangolin resource) at the service target, or use the port-forward.
+                      Point the tunnel (Pangolin resource) at the service target, or use the
+                      port-forward.
                     </p>
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    No Services found in <span className="font-mono">{current.labNamespace}</span> — check the lab log.
+                    No Services found in <span className="font-mono">{current.labNamespace}</span> —
+                    check the lab log.
                   </p>
                 )}
               </div>
@@ -324,18 +383,15 @@ export default function Lab() {
               <div className="flex flex-wrap items-baseline gap-2 text-sm">
                 {verdictBadge(current)}
                 <span className="text-xs text-muted-foreground">
-                  by {current.verdictBy} {current.verdictAt ? `· ${formatWhen(current.verdictAt)}` : ''}
+                  by {current.verdictBy}{' '}
+                  {current.verdictAt ? `· ${formatWhen(current.verdictAt)}` : ''}
                 </span>
                 {current.verdictNote && <span className="text-xs">{current.verdictNote}</span>}
               </div>
             ) : (
               current.readyAt &&
               current.step !== 'deleted' && (
-                <VerdictForm
-                  lab={current}
-                  onDone={load}
-                  onError={setError}
-                />
+                <VerdictForm lab={current} onDone={load} onError={setError} />
               )
             )}
           </CardContent>
@@ -343,73 +399,73 @@ export default function Lab() {
       )}
 
       {selectedId && (
-      <Card>
-        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
-          <div>
-            <CardTitle>Lab log</CardTitle>
-            <CardDescription>
-              {selected ? (
-                <>
-                  <span className="font-mono text-foreground">{selected.labId.slice(0, 8)}</span>
-                  {' · '}
-                  {selected.sourceNamespace}
-                  {' · '}
-                  {selected.step}
-                </>
-              ) : (
-                'No lab selected'
+        <Card>
+          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
+            <div>
+              <CardTitle>Lab log</CardTitle>
+              <CardDescription>
+                {selected ? (
+                  <>
+                    <span className="font-mono text-foreground">{selected.labId.slice(0, 8)}</span>
+                    {' · '}
+                    {selected.sourceNamespace}
+                    {' · '}
+                    {selected.step}
+                  </>
+                ) : (
+                  'No lab selected'
+                )}
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              {overview && overview.labs.length > 1 && (
+                <select
+                  value={selectedId || ''}
+                  onChange={(e) => setSelectedId(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  {overview.labs.map((l) => (
+                    <option key={l.labId} value={l.labId}>
+                      {l.sourceNamespace} · {formatWhen(l.startedAt)} · {l.step}
+                    </option>
+                  ))}
+                </select>
               )}
-            </CardDescription>
-          </div>
-          <div className="flex items-center gap-2">
-            {overview && overview.labs.length > 1 && (
-              <select
-                value={selectedId || ''}
-                onChange={(e) => setSelectedId(e.target.value)}
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-              >
-                {overview.labs.map((l) => (
-                  <option key={l.labId} value={l.labId}>
-                    {l.sourceNamespace} · {formatWhen(l.startedAt)} · {l.step}
-                  </option>
-                ))}
-              </select>
-            )}
-            {(!current || selectedId !== current.labId) && (
-              <button
-                type="button"
-                title="Close log"
-                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={() => setSelectedId(current?.labId || null)}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div
-            ref={logBoxRef}
-            className="h-[40dvh] overflow-y-auto rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none]"
-            onScroll={(e) => {
-              const el = e.currentTarget
-              stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-            }}
-          >
-            {lines.length === 0 ? (
-              <div className="text-muted-foreground">
-                {selected ? 'No log lines yet.' : 'Start a lab to see its log here.'}
-              </div>
-            ) : (
-              lines.map((line, i) => (
-                <div key={i} className="whitespace-pre-wrap break-all">
-                  {line}
+              {(!current || selectedId !== current.labId) && (
+                <button
+                  type="button"
+                  title="Close log"
+                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => setSelectedId(current?.labId || null)}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div
+              ref={logBoxRef}
+              className="h-[40dvh] overflow-y-auto rounded-md border bg-[hsl(var(--log-bg))] p-3 font-mono text-[11px] leading-relaxed text-[hsl(var(--log-fg))] [overflow-anchor:none]"
+              onScroll={(e) => {
+                const el = e.currentTarget
+                stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+              }}
+            >
+              {lines.length === 0 ? (
+                <div className="text-muted-foreground">
+                  {selected ? 'No log lines yet.' : 'Start a lab to see its log here.'}
                 </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              ) : (
+                lines.map((line, i) => (
+                  <div key={i} className="whitespace-pre-wrap break-all">
+                    {line}
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <Card>
@@ -418,12 +474,22 @@ export default function Lab() {
             <ShieldCheck className="h-4 w-4" /> Restore verification
           </CardTitle>
           <CardDescription>
-            Latest drill per namespace — verified means an operator tested the restore and marked it passed.
+            Latest drill per namespace — verified means an operator tested the restore and marked it
+            passed.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {drills.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No drills recorded yet. Start a lab to create evidence.</p>
+          {drillError ? (
+            <Alert variant="warning">
+              Verification unavailable. {drillError}{' '}
+              <Button variant="outline" size="sm" onClick={loadDrills}>
+                Retry
+              </Button>
+            </Alert>
+          ) : drills.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No drills recorded yet. Start a lab to create evidence.
+            </p>
           ) : (
             <Table>
               <TableHeader>
@@ -444,12 +510,17 @@ export default function Lab() {
                     </TableCell>
                     <TableCell>{drillBadge(d.lastStatus)}</TableCell>
                     <TableCell className="hidden max-w-[20rem] md:table-cell">
-                      <span className="block truncate text-xs text-muted-foreground" title={d.lastNote}>
+                      <span
+                        className="block truncate text-xs text-muted-foreground"
+                        title={d.lastNote}
+                      >
                         {d.lastNote || '—'}
                       </span>
                     </TableCell>
                     <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
-                      {d.lastPassedAt ? formatAge(Date.now() - new Date(d.lastPassedAt).getTime()) + ' ago' : 'never'}
+                      {d.lastPassedAt
+                        ? formatAge(Date.now() - new Date(d.lastPassedAt).getTime()) + ' ago'
+                        : 'never'}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -490,7 +561,10 @@ export default function Lab() {
                     <div className="flex flex-col items-start gap-0.5">
                       {verdictBadge(l) || <span className="text-xs text-muted-foreground">—</span>}
                       {l.verdictNote && (
-                        <span className="max-w-[16rem] truncate text-xs text-muted-foreground" title={l.verdictNote}>
+                        <span
+                          className="max-w-[16rem] truncate text-xs text-muted-foreground"
+                          title={l.verdictNote}
+                        >
                           {l.verdictNote}
                         </span>
                       )}
@@ -517,7 +591,8 @@ export default function Lab() {
       </Card>
 
       <StartLabDialog
-        open={dialogOpen}
+        open={dialogOpen && !!overview?.enabled && !current}
+        initialNamespace={initialNamespace}
         onOpenChange={setDialogOpen}
         onStarted={(st) => {
           setDialogOpen(false)
@@ -526,6 +601,19 @@ export default function Lab() {
           load()
         }}
         onError={setError}
+      />
+      <ConfirmAction
+        open={!!teardownTarget}
+        onClose={() => setTeardownTarget(null)}
+        title="Tear down restore lab?"
+        description={`This deletes the clone application, every PVC in ${teardownTarget?.labNamespace}, and their retained volumes. The lab for ${teardownTarget?.sourceNamespace} will no longer be available.`}
+        action="Tear down lab"
+        onConfirm={async () => {
+          if (teardownTarget) {
+            await api.labTeardown(teardownTarget.labId)
+            await load()
+          }
+        }}
       />
     </div>
   )
@@ -574,8 +662,8 @@ function VerdictForm({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Becomes the latest drill evidence for {lab.sourceNamespace} — shown on the dashboard's restore
-        verification panel.
+        Becomes the latest drill evidence for {lab.sourceNamespace} — shown on the dashboard's
+        restore verification panel.
       </p>
     </div>
   )
@@ -585,17 +673,19 @@ function VerdictForm({
  * will be restored (newest snapshot per PVC + SQL dump) before anything runs. */
 function StartLabDialog({
   open,
+  initialNamespace,
   onOpenChange,
   onStarted,
   onError,
 }: {
   open: boolean
+  initialNamespace?: string
   onOpenChange: (o: boolean) => void
   onStarted: (st: LabState) => void
   onError: (msg: string) => void
 }) {
   const [namespaces, setNamespaces] = useState<string[]>([])
-  const [ns, setNs] = useState('')
+  const [ns, setNs] = useState(initialNamespace || '')
   const [tier, setTier] = useState<'data' | 'app'>('app')
   const [plan, setPlan] = useState<LabPlan | null>(null)
   const [planError, setPlanError] = useState('')
@@ -649,8 +739,7 @@ function StartLabDialog({
   }, [open, ns, point])
 
   const appAvailable = !!plan?.app
-  const canStart =
-    !!ns && !!plan && !busy && (tier === 'app' ? appAvailable : !!dataPVC)
+  const canStart = !!ns && !!plan && !busy && (tier === 'app' ? appAvailable : !!dataPVC)
 
   const start = () => {
     if (!plan) return
@@ -684,8 +773,8 @@ function StartLabDialog({
         <DialogHeader>
           <DialogTitle>Start a restore lab</DialogTitle>
           <DialogDescription>
-            Restores land in the isolated lab namespace. Nothing in the source namespace is touched — no Argo pause,
-            no scale-down.
+            Restores land in the isolated lab namespace. Nothing in the source namespace is touched
+            — no Argo pause, no scale-down.
           </DialogDescription>
         </DialogHeader>
         {error && <Alert variant="danger">{error}</Alert>}
@@ -722,7 +811,12 @@ function StartLabDialog({
             <div className="space-y-2">
               <span className="text-sm font-medium">Tier</span>
               <div className="flex flex-col gap-2">
-                <label className={cn('flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm', tier === 'app' && 'border-primary')}>
+                <label
+                  className={cn(
+                    'flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm',
+                    tier === 'app' && 'border-primary',
+                  )}
+                >
                   <input
                     type="radio"
                     name="lab-tier"
@@ -737,8 +831,8 @@ function StartLabDialog({
                       {appAvailable ? (
                         <>
                           Deploy <span className="font-mono">{plan.app!.name}</span> from{' '}
-                          <span className="font-mono">{plan.app!.labPath || plan.app!.path}</span> against the restored
-                          data{plan.dump ? ' and replay the SQL dump' : ''}.
+                          <span className="font-mono">{plan.app!.labPath || plan.app!.path}</span>{' '}
+                          against the restored data{plan.dump ? ' and replay the SQL dump' : ''}.
                         </>
                       ) : (
                         plan.appError || 'Unavailable for this namespace.'
@@ -746,7 +840,12 @@ function StartLabDialog({
                     </span>
                   </span>
                 </label>
-                <label className={cn('flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm', tier === 'data' && 'border-primary')}>
+                <label
+                  className={cn(
+                    'flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm',
+                    tier === 'data' && 'border-primary',
+                  )}
+                >
                   <input
                     type="radio"
                     name="lab-tier"
@@ -819,7 +918,9 @@ function StartLabDialog({
                 min={1}
                 max={168}
                 value={ttlHours}
-                onChange={(e) => setTtlHours(Math.max(1, Math.min(168, Number(e.target.value) || 24)))}
+                onChange={(e) =>
+                  setTtlHours(Math.max(1, Math.min(168, Number(e.target.value) || 24)))
+                }
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>

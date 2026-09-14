@@ -1,4 +1,12 @@
-import { Navigate, NavLink, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
+import {
+  Link,
+  Navigate,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useSearchParams,
+} from 'react-router-dom'
 import { useEffect, useState, type ReactNode } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
@@ -15,7 +23,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react'
-import { api, type ClusterStatus, type User } from './api'
+import { api, type ClusterStatus, type User, type RestoreState } from './api'
 import { cn } from './lib/utils'
 import { useTheme } from './theme'
 import Dashboard from './pages/Dashboard'
@@ -75,6 +83,7 @@ function ThemeToggle() {
       className="h-8 w-8 shrink-0"
       onClick={toggle}
       title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
     >
       {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </Button>
@@ -154,10 +163,31 @@ export default function App() {
   const [err, setErr] = useState('')
   const [cluster, setCluster] = useState<ClusterStatus | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [pausedRestore, setPausedRestore] = useState<RestoreState | null>(null)
   const location = useLocation()
+  useEffect(() => {
+    const check = () =>
+      api
+        .restores()
+        .then((restores) =>
+          setPausedRestore(
+            restores.find(
+              (r) =>
+                r.argoSyncResumed === false || (r.argoPausedGlobally && r.argoSyncResumed !== true),
+            ) || null,
+          ),
+        )
+        .catch(() => {})
+    check()
+    const timer = setInterval(check, 10000)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
-    api.me().then(setUser).catch((e: Error) => setErr(e.message))
+    api
+      .me()
+      .then(setUser)
+      .catch((e: Error) => setErr(e.message))
   }, [])
 
   // Belt-and-braces: close the drawer on any route change (back button etc.).
@@ -180,6 +210,12 @@ export default function App() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-card focus:p-3"
+      >
+        Skip to content
+      </a>
       {/* Mobile top bar */}
       <header className="flex shrink-0 items-center justify-between border-b bg-card/40 px-3 py-2 md:hidden">
         <div className="flex items-center gap-1">
@@ -213,8 +249,25 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 md:p-8">
+      <main
+        id="main-content"
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 md:p-8"
+      >
         <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col">
+          {pausedRestore && !['/', '/restores'].includes(location.pathname) && (
+            <div className="mb-4 shrink-0">
+              <Alert variant="warning">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Argo CD reconciliation is paused for a restore.</span>
+                  <Button asChild variant="outline" size="sm">
+                    <Link to={'/restores?id=' + encodeURIComponent(pausedRestore.restoreId)}>
+                      View operation
+                    </Link>
+                  </Button>
+                </div>
+              </Alert>
+            </div>
+          )}
           {cluster && !cluster.connected && (
             <div className="mb-4 shrink-0">
               <Alert variant="danger">

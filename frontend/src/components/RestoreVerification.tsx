@@ -4,6 +4,8 @@ import { FlaskConical } from 'lucide-react'
 import { api, type DrillStatus, type K8sObject } from '../api'
 import { formatAge, formatWhen } from '../lib/utils'
 import { Badge } from './ui/badge'
+import { Alert } from './ui/alert'
+import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 
@@ -18,12 +20,20 @@ type Row = {
  * for: every backed-up namespace vs its most recent Restore Lab drill. */
 export default function RestoreVerification({ schedules }: { schedules: K8sObject[] }) {
   const [drills, setDrills] = useState<DrillStatus[] | null>(null)
-
-  useEffect(() => {
+  const [error, setError] = useState('')
+  const load = () =>
     api
       .labVerified()
-      .then(setDrills)
-      .catch(() => setDrills([]))
+      .then((value) => {
+        setDrills(value)
+        setError('')
+      })
+      .catch((e: Error) => setError(e.message))
+
+  useEffect(() => {
+    load()
+    const timer = setInterval(load, 60000)
+    return () => clearInterval(timer)
   }, [])
 
   const rows = useMemo(() => {
@@ -63,7 +73,9 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
         <CardTitle className="flex items-center gap-2">
           <FlaskConical className="h-4 w-4" />
           Restore verification
-          {neverCount > 0 && rows.length > 0 && <Badge variant="warning">{neverCount} unproven</Badge>}
+          {drills !== null && !error && neverCount > 0 && rows.length > 0 && (
+            <Badge variant="warning">{neverCount} unproven</Badge>
+          )}
         </CardTitle>
         <CardDescription>
           Last operator-passed restore drill per namespace —{' '}
@@ -74,7 +86,18 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {rows.length === 0 ? (
+        {error ? (
+          <Alert variant="warning">
+            Verification unavailable. {error}{' '}
+            <Button variant="outline" size="sm" onClick={load}>
+              Retry
+            </Button>
+          </Alert>
+        ) : drills === null ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            Loading restore verification…
+          </p>
+        ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {drills === null ? 'Loading…' : 'No backed-up namespaces found.'}
           </p>
@@ -85,7 +108,10 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
                 <TableHead>Namespace</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="hidden sm:table-cell">Last drill</TableHead>
-                <TableHead>Verified</TableHead>
+                <TableHead>Last passed</TableHead>
+                <TableHead>
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -94,7 +120,9 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
                   <TableCell className="font-mono text-xs">{r.namespace}</TableCell>
                   <TableCell>
                     {r.state === 'verified' && <Badge variant="success">verified</Badge>}
-                    {r.state === 'untested' && <Badge variant="warning">restored — not tested</Badge>}
+                    {r.state === 'untested' && (
+                      <Badge variant="warning">restored — not tested</Badge>
+                    )}
                     {r.state === 'failed' && <Badge variant="danger">last drill failed</Badge>}
                     {r.state === 'never' && <Badge variant="warning">never drilled</Badge>}
                   </TableCell>
@@ -102,7 +130,16 @@ export default function RestoreVerification({ schedules }: { schedules: K8sObjec
                     {r.lastAt ? formatWhen(r.lastAt) : '—'}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                    {r.lastPassedAt ? formatAge(Date.now() - new Date(r.lastPassedAt).getTime()) + ' ago' : 'never'}
+                    {r.lastPassedAt
+                      ? formatAge(Date.now() - new Date(r.lastPassedAt).getTime()) + ' ago'
+                      : 'never'}
+                  </TableCell>
+                  <TableCell>
+                    <Button asChild variant="link" size="sm">
+                      <Link to={'/lab?namespace=' + encodeURIComponent(r.namespace)}>
+                        Test restore
+                      </Link>
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}

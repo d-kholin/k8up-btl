@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import PageHeader from '../components/PageHeader'
 import { BellRing, Mail, Send } from 'lucide-react'
 import { api, type NotifySettings, type NotifySettingsUpdate } from '../api'
 import { Alert } from '../components/ui/alert'
@@ -53,7 +54,10 @@ export default function Settings() {
   }
 
   useEffect(() => {
-    api.notifySettings().then(hydrate).catch((e: Error) => setError(e.message))
+    api
+      .notifySettings()
+      .then(hydrate)
+      .catch((e: Error) => setError(e.message))
   }, [])
 
   async function save() {
@@ -102,13 +106,10 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Notification config from git (env) is the baseline — anything set here overrides it.
-          Blank fields fall back to the git value.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Manage backup and recovery notifications. Overrides take precedence over the configuration in git."
+      />
 
       {error && <Alert variant="danger">{error}</Alert>}
       {saved && <Alert>Settings saved and applied — no restart needed.</Alert>}
@@ -129,7 +130,12 @@ export default function Settings() {
             ) : (
               <Badge variant="secondary">none configured</Badge>
             )}
-            <Button size="sm" variant="outline" onClick={test} disabled={testBusy || !settings?.channels.length}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={test}
+              disabled={testBusy || !settings?.channels.length}
+            >
               <Send className="h-3.5 w-3.5" />
               {testBusy ? 'Sending…' : 'Send test'}
             </Button>
@@ -140,7 +146,9 @@ export default function Settings() {
             {Object.entries(testResult).map(([ch, res]) => (
               <div key={ch} className="flex items-center gap-2">
                 <Badge variant={res === 'ok' ? 'success' : 'danger'}>{ch}</Badge>
-                <span className={res === 'ok' ? 'text-muted-foreground' : 'text-destructive'}>{res}</span>
+                <span className={res === 'ok' ? 'text-muted-foreground' : 'text-destructive'}>
+                  {res}
+                </span>
               </div>
             ))}
           </CardContent>
@@ -153,7 +161,8 @@ export default function Settings() {
             <BellRing className="h-4 w-4" /> ntfy
           </CardTitle>
           <CardDescription>
-            Enabled when a topic is set (git: {env?.ntfyTopic ? <code className="font-mono">{env.ntfyTopic}</code> : 'not set'})
+            Enabled when a topic is set (git:{' '}
+            {env?.ntfyTopic ? <code className="font-mono">{env.ntfyTopic}</code> : 'not set'})
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -256,10 +265,14 @@ function Field({
   value: string
   onChange: (v: string) => void
 }) {
+  const id = useId()
   return (
     <div className="grid gap-1.5">
-      <label className="text-xs text-muted-foreground">{label}</label>
+      <label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </label>
       <Input
+        id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={env ? `git: ${env}` : 'not set in git'}
@@ -282,13 +295,15 @@ function SecretField({
   onChange: (s: SecretState) => void
 }) {
   const status = overrideSet ? 'override set' : envSet ? 'set in git' : 'not set'
+  const id = useId()
   return (
     <div className="grid gap-1.5">
-      <label className="text-xs text-muted-foreground">
+      <label htmlFor={id} className="text-xs text-muted-foreground">
         {label} <span className="opacity-70">({status})</span>
       </label>
       <div className="flex gap-2">
         <Input
+          id={id}
           type="password"
           value={state.value}
           onChange={(e) => onChange({ value: e.target.value, touched: true })}

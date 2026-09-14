@@ -4,7 +4,7 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    --background: 216 33% 97%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
@@ -23,7 +23,7 @@
     --row-hover-foreground: 222 47% 11%;
     --destructive: 0 72% 42%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214 28% 78%;
+    --border: 214 25% 86%;
     --input: 214 28% 78%;
     --ring: 221 83% 40%;
     --radius: 0.6rem;
@@ -86,11 +86,17 @@
 
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums;
   }
 
   code,
   .font-mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 }

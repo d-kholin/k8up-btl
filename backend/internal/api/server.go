@@ -122,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/restores/{id}/resume-argo", s.handleResumeArgoByRestore)
 	mux.HandleFunc("POST /api/v1/restores/{id}/cancel", s.handleCancelRestore)
 	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/recovery-plan", s.handleRecoveryPlan)
+	mux.HandleFunc("GET /api/v1/snapshots/{namespace}/{name}/restore-plan", s.handleRestorePlan)
 	mux.HandleFunc("POST /api/v1/recoveries", s.handleStartRecovery)
 	mux.HandleFunc("POST /api/v1/argo/{namespace}/{name}/resume", s.handleResumeArgo)
 	mux.HandleFunc("GET /api/v1/interrupted", s.handleInterrupted)

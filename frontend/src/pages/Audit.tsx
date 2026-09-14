@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import PageHeader from '../components/PageHeader'
 import { Download } from 'lucide-react'
 import { api, type AuditEntry } from '../api'
 import { formatBytes, formatWhen } from '../lib/utils'
@@ -7,33 +9,67 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader } from '../components/ui/card'
 import { Input } from '../components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table'
 
 const PAGE_SIZE = 50
 
 export default function Audit() {
+  const [params, setParams] = useSearchParams()
+  const setParam = (key: string, value: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (value) next.set(key, value)
+        else next.delete(key)
+        next.delete('offset')
+        return next
+      },
+      { replace: true },
+    )
   const [items, setItems] = useState<AuditEntry[]>([])
   const [total, setTotal] = useState(0)
-  const [kind, setKind] = useState('')
-  const [actor, setActor] = useState('')
-  const [since, setSince] = useState('')
-  const [until, setUntil] = useState('')
-  const [offset, setOffset] = useState(0)
+  const kind = params.get('kind') || ''
+  const actor = params.get('actor') || ''
+  const since = params.get('since') || ''
+  const until = params.get('until') || ''
+  const offset = Math.max(0, Number(params.get('offset')) || 0)
+  const setKind = (value: string) => setParam('kind', value)
+  const setActor = (value: string) => setParam('actor', value)
+  const setSince = (value: string) => setParam('since', value)
+  const setUntil = (value: string) => setParam('until', value)
+  const setOffset = (value: number) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.set('offset', String(value))
+        return next
+      },
+      { replace: true },
+    )
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
 
   // Debounce the free-text actor filter so typing doesn't spam the API.
-  const [actorInput, setActorInput] = useState('')
+  const [actorInput, setActorInput] = useState(actor)
+  useEffect(() => setActorInput(actor), [actor])
   useEffect(() => {
-    const t = setTimeout(() => setActor(actorInput.trim()), 350)
+    const t = setTimeout(() => {
+      if (actorInput.trim() !== actor) setActor(actorInput.trim())
+    }, 350)
     return () => clearTimeout(t)
-  }, [actorInput])
+  }, [actorInput, actor])
 
   // Any filter change resets to the first page.
   useEffect(() => {
-    setOffset(0)
-  }, [kind, actor, since, until])
-
-  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
     api
       .audit({
         kind: kind || undefined,
@@ -44,11 +80,20 @@ export default function Audit() {
         offset,
       })
       .then((page) => {
+        if (cancelled) return
         setItems(page.entries)
         setTotal(page.total)
         setError('')
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [kind, actor, since, until, offset])
 
   const page = Math.floor(offset / PAGE_SIZE) + 1
@@ -56,16 +101,24 @@ export default function Audit() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Audit log</h1>
-        <p className="text-sm text-muted-foreground">90-day retention · restores, downloads, jobs</p>
-      </div>
+      <PageHeader
+        title="Audit log"
+        description="Trace restore operations, downloads, and backup jobs across the last 90 days."
+      />
+      {loading && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading audit events…
+        </p>
+      )}
       {error && <Alert variant="danger">{error}</Alert>}
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-end gap-3 space-y-0">
           <div className="grid gap-1">
-            <label className="text-xs text-muted-foreground">Kind</label>
+            <label htmlFor="audit-kind" className="text-xs text-muted-foreground">
+              Kind
+            </label>
             <select
+              id="audit-kind"
               className="h-9 rounded-md border border-input bg-background px-3 text-sm"
               value={kind}
               onChange={(e) => setKind(e.target.value)}
@@ -75,12 +128,16 @@ export default function Audit() {
               <option value="download">download</option>
               <option value="backup">backup</option>
               <option value="check">check</option>
+              <option value="drill">drill</option>
               <option value="system">system</option>
             </select>
           </div>
           <div className="grid gap-1">
-            <label className="text-xs text-muted-foreground">Actor</label>
+            <label htmlFor="audit-actor" className="text-xs text-muted-foreground">
+              Actor
+            </label>
             <Input
+              id="audit-actor"
               placeholder="username"
               value={actorInput}
               onChange={(e) => setActorInput(e.target.value)}
@@ -88,8 +145,11 @@ export default function Audit() {
             />
           </div>
           <div className="grid gap-1">
-            <label className="text-xs text-muted-foreground">From</label>
+            <label htmlFor="audit-from" className="text-xs text-muted-foreground">
+              From
+            </label>
             <Input
+              id="audit-from"
               type="date"
               value={since}
               onChange={(e) => setSince(e.target.value)}
@@ -97,8 +157,11 @@ export default function Audit() {
             />
           </div>
           <div className="grid gap-1">
-            <label className="text-xs text-muted-foreground">To</label>
+            <label htmlFor="audit-to" className="text-xs text-muted-foreground">
+              To
+            </label>
             <Input
+              id="audit-to"
               type="date"
               value={until}
               onChange={(e) => setUntil(e.target.value)}
@@ -157,7 +220,11 @@ export default function Audit() {
               {items.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={5} className="text-muted-foreground">
-                    No entries match.
+                    {loading
+                      ? 'Loading events…'
+                      : error
+                        ? 'Audit data unavailable.'
+                        : 'No entries match these filters.'}
                   </TableCell>
                 </TableRow>
               )}

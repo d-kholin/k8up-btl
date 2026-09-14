@@ -12,18 +12,50 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader } from '../components/ui/card'
 import { Input } from '../components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import PageHeader from '../components/PageHeader'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table'
 
 type NsGroup = { namespace: string; items: K8sObject[] }
 
 export default function Snapshots() {
   // Deep links from the dashboard land here as /snapshots?namespace=<ns>.
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const nsParam = searchParams.get('namespace') || ''
   const [items, setItems] = useState<K8sObject[]>([])
   const [error, setError] = useState('')
-  const [filter, setFilter] = useState(nsParam)
-  const [selectedDay, setSelectedDay] = useState<string | null>(null)
+  const filter = searchParams.get('q') || ''
+  const selectedDay = searchParams.get('day')
+  const [loading, setLoading] = useState(true)
+  const [calendarOpen, setCalendarOpen] = useState(!!selectedDay)
+  const [limits, setLimits] = useState<Record<string, number>>({})
+  const setParam = (key: string, value: string) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (value) next.set(key, value)
+        else next.delete(key)
+        return next
+      },
+      { replace: true },
+    )
+  const load = () => {
+    setLoading(true)
+    api
+      .snapshots()
+      .then((value) => {
+        setItems(value)
+        setError('')
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
+  }
   const [expanded, setExpanded] = useState<Record<string, boolean>>(
     nsParam ? { [nsParam]: true } : {},
   )
@@ -33,7 +65,7 @@ export default function Snapshots() {
   const [recoverSnap, setRecoverSnap] = useState<K8sObject | null>(null)
 
   useEffect(() => {
-    api.snapshots().then(setItems).catch((e: Error) => setError(e.message))
+    load()
   }, [])
 
   // Snapshots matching the text filter — the calendar shades these, so it
@@ -41,6 +73,7 @@ export default function Snapshots() {
   const textFiltered = useMemo(() => {
     const q = filter.trim().toLowerCase()
     return items.filter((s) => {
+      if (nsParam && s.namespace !== nsParam) return false
       if (!q) return true
       const spec = snapSpec(s)
       const hay = [s.namespace, s.name, ...(spec.paths || []), spec.id, spec.repository]
@@ -49,7 +82,7 @@ export default function Snapshots() {
         .toLowerCase()
       return hay.includes(q)
     })
-  }, [items, filter])
+  }, [items, filter, nsParam])
 
   const groups = useMemo(() => {
     const filtered = textFiltered.filter((s) => {
@@ -68,13 +101,13 @@ export default function Snapshots() {
       namespace,
       items: list.sort((a, b) => snapTime(b) - snapTime(a)),
     }))
-    out.sort((a, b) => a.namespace.localeCompare(b.namespace))
+    out.sort((a, b) => snapTime(b.items[0]) - snapTime(a.items[0]))
     return out
   }, [textFiltered, selectedDay])
 
   // Picking a day narrows the list to a handful — open everything.
   function selectDay(day: string | null) {
-    setSelectedDay(day)
+    setParam('day', day || '')
     if (day) {
       const next: Record<string, boolean> = {}
       for (const s of textFiltered) {
@@ -89,19 +122,43 @@ export default function Snapshots() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Snapshots</h1>
-        <p className="text-sm text-muted-foreground">Grouped by namespace · collapsed by default</p>
-      </div>
+      <PageHeader
+        title="Snapshots"
+        description="Find a recovery point, inspect its files, or compare changes before restoring."
+        actions={
+          <Button variant="outline" disabled={loading} onClick={load}>
+            Refresh
+          </Button>
+        }
+      />
 
       {error && <Alert variant="danger">{error}</Alert>}
 
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center gap-3 space-y-0">
+          <select
+            aria-label="Namespace"
+            className="h-9 max-w-full rounded-md border border-input bg-background px-3 text-sm"
+            value={nsParam}
+            onChange={(e) => setParam('namespace', e.target.value)}
+          >
+            <option value="">All namespaces</option>
+            {[
+              ...new Set([
+                ...items.map((s) => s.namespace || 'default'),
+                ...(nsParam ? [nsParam] : []),
+              ]),
+            ]
+              .sort()
+              .map((ns) => (
+                <option key={ns}>{ns}</option>
+              ))}
+          </select>
           <Input
-            placeholder="Filter namespace, PVC, path…"
+            aria-label="Search snapshot sources"
+            placeholder="Search volume, dump, or snapshot…"
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(e) => setParam('q', e.target.value)}
             className="max-w-sm"
           />
           <span className="text-sm text-muted-foreground">
@@ -109,11 +166,24 @@ export default function Snapshots() {
             {selectedDay ? ` · on ${selectedDay}` : ''}
           </span>
           {selectedDay && (
-            <Badge variant="secondary" className="cursor-pointer" onClick={() => selectDay(null)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => selectDay(null)}
+              aria-label="Clear date filter"
+            >
               {selectedDay} ✕
-            </Badge>
+            </Button>
           )}
           <div className="ml-auto flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              aria-expanded={calendarOpen}
+              onClick={() => setCalendarOpen((v) => !v)}
+            >
+              Date filter
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -126,40 +196,74 @@ export default function Snapshots() {
             >
               Expand all
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => setExpanded({})}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setExpanded(Object.fromEntries(groups.map((g) => [g.namespace, false])))
+              }
+            >
               Collapse all
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="border-t pt-4">
-          <div className="flex flex-wrap items-start gap-6">
-            <SnapshotCalendar snapshots={textFiltered} selected={selectedDay} onSelect={selectDay} />
-            <div className="min-w-[200px] flex-1 text-sm text-muted-foreground">
-              <p>
-                Pick a day to jump to that day's restore points — shading follows the text filter
-                above. Days are shown in your local timezone.
-              </p>
-              {selectedDay && total === 0 && (
-                <p className="mt-2">No snapshots on {selectedDay} match the current filter.</p>
-              )}
+        {calendarOpen && (
+          <CardContent className="border-t pt-4">
+            <div className="flex flex-wrap items-start gap-6">
+              <SnapshotCalendar
+                snapshots={textFiltered}
+                selected={selectedDay}
+                onSelect={selectDay}
+              />
+              <div className="min-w-[200px] flex-1 text-sm text-muted-foreground">
+                <p>
+                  Pick a day to jump to that day's restore points — shading follows the text filter
+                  above. Days are shown in your local timezone.
+                </p>
+                {selectedDay && total === 0 && (
+                  <p className="mt-2">No snapshots on {selectedDay} match the current filter.</p>
+                )}
+              </div>
             </div>
-          </div>
-        </CardContent>
+          </CardContent>
+        )}
       </Card>
 
-      {groups.length === 0 && (
+      {loading && (
+        <p role="status" className="py-8 text-sm text-muted-foreground">
+          Loading restore points…
+        </p>
+      )}
+      {!loading && !error && groups.length === 0 && (
         <Card>
-          <CardContent className="py-8 text-sm text-muted-foreground">No snapshots match.</CardContent>
+          <CardContent className="space-y-3 py-8 text-sm text-muted-foreground">
+            <p>
+              {items.length
+                ? 'No snapshots match these filters.'
+                : 'No snapshots found. Run a backup from Workloads to create a recovery point.'}
+            </p>
+            {items.length ? (
+              <Button variant="outline" onClick={() => setSearchParams({})}>
+                Clear filters
+              </Button>
+            ) : (
+              <Button asChild variant="outline">
+                <Link to="/workloads">View workloads</Link>
+              </Button>
+            )}
+          </CardContent>
         </Card>
       )}
 
       {groups.map((g) => {
-        const open = !!expanded[g.namespace]
+        const open = expanded[g.namespace] !== false
         const latest = g.items[0]
         return (
           <Card key={g.namespace}>
             <button
               type="button"
+              aria-expanded={open}
               className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-row-hover sm:px-5 sm:py-4"
               onClick={() => setExpanded((e) => ({ ...e, [g.namespace]: !open }))}
             >
@@ -172,7 +276,9 @@ export default function Snapshots() {
                 <div className="font-mono text-sm font-medium">{g.namespace}</div>
                 <div className="truncate text-xs text-muted-foreground">
                   latest {formatWhen(snapSpec(latest).date || latest.creationTimestamp)}
-                  {snapSpec(latest).paths?.[0] ? ` · ${workloadFromPaths(snapSpec(latest).paths || [])}` : ''}
+                  {snapSpec(latest).paths?.[0]
+                    ? ` · ${workloadFromPaths(snapSpec(latest).paths || [])}`
+                    : ''}
                 </div>
               </div>
               <Badge variant="secondary">{g.items.length}</Badge>
@@ -190,7 +296,7 @@ export default function Snapshots() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {g.items.map((s) => {
+                    {g.items.slice(0, limits[g.namespace] || 10).map((s) => {
                       const spec = snapSpec(s)
                       return (
                         <TableRow key={`${s.namespace}/${s.name}`}>
@@ -200,7 +306,10 @@ export default function Snapshots() {
                           <TableCell>
                             <div className="font-mono text-xs">{s.name}</div>
                             {spec.id && (
-                              <div className="font-mono text-[11px] text-muted-foreground" title={spec.id}>
+                              <div
+                                className="font-mono text-[11px] text-muted-foreground"
+                                title={spec.id}
+                              >
                                 {spec.id.slice(0, 12)}…
                               </div>
                             )}
@@ -244,6 +353,21 @@ export default function Snapshots() {
                     })}
                   </TableBody>
                 </Table>
+                {g.items.length > (limits[g.namespace] || 10) && (
+                  <Button
+                    className="mt-3"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setLimits((prev) => ({
+                        ...prev,
+                        [g.namespace]: (prev[g.namespace] || 10) + 25,
+                      }))
+                    }
+                  >
+                    Show more · {g.items.length - (limits[g.namespace] || 10)} remaining
+                  </Button>
+                )}
               </CardContent>
             )}
           </Card>
