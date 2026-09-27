@@ -416,7 +416,7 @@ func (c *Clients) ListInterruptedRestores(ctx context.Context, argoNS string) ([
 }
 
 // CreateRestoreCR creates a k8up Restore without Argo tracking labels.
-// backend should include at least s3.bucket (e.g. naku-k8up/<ns>) when using global S3 endpoint.
+// backend should include at least s3.bucket (e.g. k8up-k3s/<ns>) when using global S3 endpoint.
 func (c *Clients) CreateRestoreCR(ctx context.Context, namespace, name, snapshotID, pvcName string, backend map[string]any) (*unstructured.Unstructured, error) {
         if backend == nil {
                 var err error
@@ -492,7 +492,7 @@ func (c *Clients) ResolveRestoreBackend(ctx context.Context, namespace, snapshot
         return nil, fmt.Errorf("could not resolve s3 bucket for namespace %s (set Schedule.spec.backend or Snapshot.spec.repository)", namespace)
 }
 
-// s3BucketFromRepo parses restic S3 URIs like s3:https://garage.example/naku-k8up/ns
+// s3BucketFromRepo parses restic S3 URIs like s3:https://s3.example/k8up-k3s/ns
 func s3BucketFromRepo(repo string) string {
         // s3:https://host/path or s3:http://host/path
         const pfx = "s3:"

@@ -336,7 +336,10 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err, http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, summarizeList(list.Items))
+	// Hide Snapshot CRs from retired backends (e.g. Garage) so the UI only
+	// offers restore points the current k8up-global credentials can open.
+	items := s.filterSnapshotsCurrentBackend(r.Context(), list.Items)
+	writeJSON(w, http.StatusOK, summarizeList(items))
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
@@ -932,10 +935,13 @@ func (s *Server) repoEnvForSnapshot(ctx context.Context, ns, name string) (resti
 	}
 
 	// K8up Snapshot CR on this cluster: spec.repository is a full restic URI
-	// e.g. s3:https://garage.../naku-k8up/<ns>
+	// e.g. s3:https://s3.<region>.backblazeb2.com/k8up-k3s/<ns>
 	repoURL, _, _ := nestedString(snap.Object, "spec", "repository")
 	if repoURL == "" {
 		repoURL, _, _ = nestedString(snap.Object, "status", "repository")
+	}
+	if err := s.snapshotUsableWithGlobalBackend(ctx, repoURL); err != nil {
+		return resticcmd.RepoEnv{}, "", err
 	}
 
 	env := []string{}
