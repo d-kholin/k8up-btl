@@ -9,8 +9,8 @@ import (
 )
 
 func TestS3BucketFromRepo(t *testing.T) {
-	got := s3BucketFromRepo("s3:https://garage.nakunga.com/naku-k8up/lubelogger")
-	if got != "naku-k8up/lubelogger" {
+	got := s3BucketFromRepo("s3:https://s3.us-east-005.backblazeb2.com/k8up-k3s/lubelogger")
+	if got != "k8up-k3s/lubelogger" {
 		t.Fatalf("got %q", got)
 	}
 }

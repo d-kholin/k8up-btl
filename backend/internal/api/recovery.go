@@ -164,13 +164,14 @@ func (s *Server) nearbyPVCSnapshots(ctx context.Context, ns, dumpSnapName string
 	if err != nil {
 		return out
 	}
+	items := s.filterSnapshotsCurrentBackend(ctx, list.Items)
 	type bestPick struct {
 		opt   recoveryPVCOption
 		delta float64
 	}
 	best := map[string]bestPick{}
-	for i := range list.Items {
-		item := &list.Items[i]
+	for i := range items {
+		item := &items[i]
 		if item.GetName() == dumpSnapName {
 			continue
 		}

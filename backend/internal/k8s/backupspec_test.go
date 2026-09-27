@@ -32,7 +32,7 @@ func schedule(ns string, spec map[string]any) *unstructured.Unstructured {
 
 func TestResolveBackupSpecInheritsFromSchedule(t *testing.T) {
 	c := fakeDynamic(schedule("linkwarden", map[string]any{
-		"backend":      map[string]any{"s3": map[string]any{"bucket": "naku-k8up/linkwarden"}},
+		"backend":      map[string]any{"s3": map[string]any{"bucket": "k8up-k3s/linkwarden"}},
 		"podConfigRef": map[string]any{"name": "backup-pod"},
 		"backup":       map[string]any{"schedule": "@daily-random"},
 	}))
@@ -40,7 +40,7 @@ func TestResolveBackupSpecInheritsFromSchedule(t *testing.T) {
 
 	be, _ := spec["backend"].(map[string]any)
 	s3, _ := be["s3"].(map[string]any)
-	if s3["bucket"] != "naku-k8up/linkwarden" {
+	if s3["bucket"] != "k8up-k3s/linkwarden" {
 		t.Fatalf("backend not inherited: %v", spec["backend"])
 	}
 	ref, _ := spec["podConfigRef"].(map[string]any)

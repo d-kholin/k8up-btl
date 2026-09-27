@@ -330,13 +330,14 @@ func (s *Server) collectStorageStats(ctx context.Context) (*storageStatsResponse
 	// Snapshot counts
 	snaps, err := s.K8s.ListResource(ctx, k8s.GVRSnapshot, "")
 	if err == nil {
-		for i := range snaps.Items {
-			ns := snaps.Items[i].GetNamespace()
+		items := s.filterSnapshotsCurrentBackend(ctx, snaps.Items)
+		for i := range items {
+			ns := items[i].GetNamespace()
 			if e, ok := byNS[ns]; ok {
 				e.snaps++
 			} else {
 				// discover repo from snapshot
-				repoURI, _, _ := nestedString(snaps.Items[i].Object, "spec", "repository")
+				repoURI, _, _ := nestedString(items[i].Object, "spec", "repository")
 				bucket := s3BucketFromRepoURI(repoURI)
 				if bucket == "" {
 					continue
@@ -475,11 +476,12 @@ func (s *Server) globalResticEnv(ctx context.Context) ([]string, error) {
 }
 
 func (s *Server) repoEnvForNamespace(ctx context.Context, ns, bucket, _endpoint string, baseEnv []string) (resticcmd.RepoEnv, error) {
-	// Prefer full repository URI from a snapshot in ns
+	// Prefer full repository URI from a current-backend snapshot in ns
 	list, err := s.K8s.ListResource(ctx, k8s.GVRSnapshot, ns)
 	if err == nil {
-		for i := range list.Items {
-			repo, _, _ := nestedString(list.Items[i].Object, "spec", "repository")
+		items := s.filterSnapshotsCurrentBackend(ctx, list.Items)
+		for i := range items {
+			repo, _, _ := nestedString(items[i].Object, "spec", "repository")
 			if repo != "" {
 				env := append([]string{}, baseEnv...)
 				env = append(env, "RESTIC_REPOSITORY="+repo)
